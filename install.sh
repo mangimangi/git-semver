@@ -75,6 +75,7 @@ config.setdefault('vendors', {})
 config['vendors']['git-semver'] = {
     'repo': '$SEMVER_REPO',
     'install_branch': 'chore/install-git-semver',
+    'dogfood': True,
     'protected': ['.semver/**'],
     'allowed': ['.semver/config.json', '.semver/.version']
 }
