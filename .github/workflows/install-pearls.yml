@@ -32,15 +32,13 @@ on:
     secrets:
       PRL_PAT:
         required: true
-  schedule:
-    - cron: 'INSTALL_SCHEDULE'
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  PEARLS_REPO: USER/pearls
+  PEARLS_REPO: mangimangi/pearls
 
 jobs:
   install:
