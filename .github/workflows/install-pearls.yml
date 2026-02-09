@@ -32,8 +32,6 @@ on:
     secrets:
       PRL_PAT:
         required: true
-  schedule:
-    - cron: '0 9 * * 1'
 
 permissions:
   contents: write
