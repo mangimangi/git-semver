@@ -29,7 +29,7 @@ permissions:
   pull-requests: write
 
 env:
-  SEMVER_REPO: USER/git-semver
+  SEMVER_REPO: mangimangi/git-semver
 
 jobs:
   install:
@@ -43,9 +43,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail
           INPUT_VERSION="${{ inputs.version || 'latest' }}"
           if [ "$INPUT_VERSION" = "latest" ]; then
             VERSION=$(gh api "repos/${{ env.SEMVER_REPO }}/releases/latest" --jq '.tag_name' | sed 's/^v//')
+            if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+              echo "::error::Failed to resolve latest version from ${{ env.SEMVER_REPO }}. Check that SEMVER_REPO is set correctly and the repo has published releases."
+              exit 1
+            fi
             echo "Resolved latest version: $VERSION"
           else
             VERSION="$INPUT_VERSION"
