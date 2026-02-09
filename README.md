@@ -24,9 +24,10 @@ curl -fsSL https://raw.githubusercontent.com/mangimangi/git-semver/latest/instal
 
 ### Via GitHub Actions (ongoing updates)
 
-The `install-git-semver.yml` workflow handles both initial installation and updates:
-- Can be triggered manually from the Actions tab with an optional version
+The `install-vendored.yml` workflow handles updates for all vendored tools (including git-semver):
+- Can be triggered manually from the Actions tab with an optional vendor + version
 - Creates a PR when updates are available
+- Requires [git-vendored](git-vendored/) to be installed first
 
 ### What gets installed
 
@@ -38,8 +39,7 @@ your-project/
 │   └── .version           # Installed version tracker
 └── .github/
     └── workflows/
-        ├── version-bump.yml          # Auto-bump on merge
-        └── install-git-semver.yml    # Self-update workflow
+        └── version-bump.yml          # Auto-bump on merge
 ```
 
 ## Quick Start
@@ -265,29 +265,63 @@ Thin wrapper around `git-semver` — handles triggers and auth, the script handl
 - **Direct push mode** (default): pushes directly to main.
 - **PR mode**: when `automerge: false`, creates a branch and PR instead.
 
-### install-git-semver.yml
-
-Self-update workflow:
-- **Manual trigger**: `workflow_dispatch` with optional version
-- **`workflow_call`**: for chaining from other workflows
-- Creates PR with version diff; automerge controlled by config
-
 ### Authentication
 
 | Workflow | Auth | Notes |
 |----------|------|-------|
 | `version-bump.yml` | `GITHUB_TOKEN` | No PAT required |
-| `install-git-semver.yml` | `GITHUB_TOKEN` (or PAT) | PAT only needed if branch protection requires checks on PRs |
+| `install-vendored.yml` | `GITHUB_TOKEN` / `VENDOR_PAT` | `VENDOR_PAT` only needed for private vendor repos |
+
+## Vendor Management
+
+git-semver uses [git-vendored](git-vendored/) for unified install/protection across all vendored tools. See the [git-vendored README](git-vendored/) for full details.
+
+### Installed vendor infrastructure
+
+```
+.vendored/
+├── config.json        # Vendor registry (edit this to add vendors)
+├── .version           # git-vendored version tracker
+├── install            # Vendored script — installs/updates vendors
+└── check              # Vendored script — protects vendor files on PR
+.dogfood/
+├── .version           # git-dogfood version tracker
+└── resolve            # Vendored script — finds dogfood vendor
+.github/workflows/
+├── install-vendored.yml   # Installs/updates any vendor
+├── check-vendor.yml       # Blocks direct edits to vendor files
+└── dogfood.yml            # Triggers self-update after release
+```
+
+### How it works
+
+1. **install-vendored.yml** — single workflow handles all vendor updates (schedule, manual, or called by dogfood)
+2. **check-vendor.yml** — runs `.vendored/check` on PRs to block unauthorized vendor file edits
+3. **dogfood.yml** — after a Release, finds the vendor with `dogfood: true` and triggers install-vendored
+
+### Vendor lifecycle
+
+```
+code change → version-bump → release → dogfood → install-vendored → PR → merge
+              (git-semver)    (git-semver) (git-dogfood) (git-vendored)
+```
 
 ## File Classification
 
 | File | Type | Can Edit? |
 |------|------|-----------|
-| `.semver/git-semver` | Implementation | No — update via install workflow |
-| `.github/workflows/version-bump.yml` | Workflow | No — update via install workflow |
-| `.github/workflows/install-git-semver.yml` | Workflow | No — update via install workflow |
-| `.semver/config.json` | Config | Yes — your settings |
+| `.semver/git-semver` | Implementation | No — update via install-vendored |
+| `.semver/config.json` | Config | Yes — your versioning settings |
 | `.semver/.version` | Meta | Auto-managed |
+| `.vendored/install` | Implementation | No — update via install-vendored |
+| `.vendored/check` | Implementation | No — update via install-vendored |
+| `.vendored/config.json` | Config | Yes — vendor registry |
+| `.vendored/.version` | Meta | Auto-managed |
+| `.dogfood/resolve` | Implementation | No — update via install-vendored |
+| `.github/workflows/version-bump.yml` | Workflow | No — installed by git-semver |
+| `.github/workflows/install-vendored.yml` | Workflow | No — installed by git-vendored |
+| `.github/workflows/check-vendor.yml` | Workflow | No — installed by git-vendored |
+| `.github/workflows/dogfood.yml` | Workflow | No — installed by git-dogfood |
 
 ## Commit Message Conventions
 
