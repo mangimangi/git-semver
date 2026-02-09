@@ -19,13 +19,12 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 ### Via curl (initial install)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/USER/git-semver/latest/install.sh | bash -s <version> <repo>
+curl -fsSL https://raw.githubusercontent.com/mangimangi/git-semver/latest/install.sh | bash -s <version>
 ```
 
 ### Via GitHub Actions (ongoing updates)
 
 The `install-git-semver.yml` workflow handles both initial installation and updates:
-- Runs weekly to check for updates (configurable schedule)
 - Can be triggered manually from the Actions tab with an optional version
 - Creates a PR when updates are available
 
@@ -162,7 +161,6 @@ Checks all configured components (root + subdirectories) for changed files and b
   "install": {
     "on_merge": true,
     "automerge": true,
-    "schedule": "0 9 * * 1"
   }
 }
 ```
@@ -206,7 +204,6 @@ When enabled, collects commit messages since the last tag, filters out noise pre
 |-----|---------|-------------|
 | `on_merge` | `true` | Auto-trigger patch bump when `files` change on merge to main. When `false`, bumps are manual-only |
 | `automerge` | `true` | Version bump commits push directly to main. When `false`, creates a PR instead |
-| `schedule` | `"0 9 * * 1"` | Cron for `install-git-semver.yml` update checks. Set to `false` to disable |
 
 ### Subdirectory configs (monorepo support)
 
