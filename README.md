@@ -220,7 +220,6 @@ jobs:
 
 Self-update workflow:
 - **Manual trigger**: `workflow_dispatch` with optional version
-- **Scheduled trigger**: configurable cron (default: Mondays 9am UTC)
 - **`workflow_call`**: for chaining from other workflows
 - Creates PR with version diff; automerge controlled by config
 
