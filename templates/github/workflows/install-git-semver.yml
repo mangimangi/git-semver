@@ -29,7 +29,7 @@ permissions:
   pull-requests: write
 
 env:
-  SEMVER_REPO: USER/git-semver
+  SEMVER_REPO: mangimangi/git-semver
 
 jobs:
   install:
@@ -80,7 +80,7 @@ jobs:
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
           INSTALL_URL="https://raw.githubusercontent.com/${{ env.SEMVER_REPO }}/v${VERSION}/install.sh"
-          curl -fsSL "$INSTALL_URL" | bash -s "$VERSION" "${{ env.SEMVER_REPO }}"
+          curl -fsSL "$INSTALL_URL" | bash -s "$VERSION"
 
       - name: Read automerge config
         if: steps.check.outputs.skip == 'false'
