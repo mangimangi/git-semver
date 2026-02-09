@@ -9,11 +9,10 @@
 #              Falls back to curl for public repos when not set.
 #
 # Behavior:
-#   - Downloads git-semver core script to .semver/git-semver
-#   - Downloads workflow templates to .github/workflows/
-#   - Writes .semver/.version for version tracking
+#   - Always updates: .semver/git-semver (core script), .semver/.version
+#   - First install only: workflow templates to .github/workflows/ (skipped if present)
 #   - Preserves .semver/config.json (only creates if missing)
-#   - Substitutes SEMVER_REPO placeholder in workflow templates
+#   - Substitutes SEMVER_REPO placeholder in workflow templates on first install
 #   - Templates schedule cron from config (or removes schedule block)
 #
 # Install config (in .semver/config.json):
@@ -76,9 +75,13 @@ if [ ! -f .semver/config.json ]; then
     echo "Created .semver/config.json (configure your file patterns!)"
 fi
 
-# Helper to install a workflow file with placeholder substitution
+# Helper to install a workflow file with placeholder substitution (first install only)
 install_workflow() {
     local workflow="$1"
+    if [ -f ".github/workflows/$workflow" ]; then
+        echo "Workflow .github/workflows/$workflow already exists, skipping"
+        return
+    fi
     if fetch_file "templates/github/workflows/$workflow" ".github/workflows/$workflow" 2>/dev/null; then
         sed -i "s|SEMVER_REPO: USER/git-semver|SEMVER_REPO: $SEMVER_REPO|g" ".github/workflows/$workflow"
         # Substitute or remove schedule in install-git-semver.yml
@@ -87,11 +90,11 @@ install_workflow() {
         else
             sed -i "s|INSTALL_SCHEDULE|$INSTALL_SCHEDULE|g" ".github/workflows/$workflow"
         fi
-        echo "Updated .github/workflows/$workflow"
+        echo "Installed .github/workflows/$workflow"
     fi
 }
 
-# Install workflow templates
+# Install workflow templates (skipped if already present)
 install_workflow "version-bump.yml"
 install_workflow "install-git-semver.yml"
 
