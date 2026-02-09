@@ -93,7 +93,7 @@ jobs:
             AUTOMERGE=$(python3 -c "
           import json
           c = json.load(open('.semver/config.json'))
-          print(str(c.get('install', {}).get('automerge_version_bumps', True)).lower())
+          print(str(c.get('install', {}).get('automerge', True)).lower())
           " 2>/dev/null || echo "true")
           fi
           echo "automerge=$AUTOMERGE" >> $GITHUB_OUTPUT

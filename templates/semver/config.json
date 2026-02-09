@@ -1,0 +1,8 @@
+{
+  "version_file": "VERSION",
+  "files": [],
+  "_comment_files": "Glob patterns for files whose changes trigger automatic patch bumps (e.g. 'src/**/*.py')",
+  "updates": {},
+  "_comment_updates": "Files to update with new version on bump. 'file' replaces entire file; ['pattern'] does find-and-replace",
+  "changelog": true
+}

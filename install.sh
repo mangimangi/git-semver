@@ -72,16 +72,7 @@ fi
 
 # config.json - only create if missing (preserves user settings)
 if [ ! -f .semver/config.json ]; then
-    cat > .semver/config.json << 'DEFAULT_CONFIG'
-{
-  "version_file": "VERSION",
-  "files": [
-    "CHANGEME"
-  ],
-  "updates": {},
-  "changelog": true
-}
-DEFAULT_CONFIG
+    fetch_file "templates/semver/config.json" ".semver/config.json"
     echo "Created .semver/config.json (configure your file patterns!)"
 fi
 
@@ -102,7 +93,6 @@ install_workflow() {
 
 # Install workflow templates
 install_workflow "version-bump.yml"
-install_workflow "is-version-bump.yml"
 install_workflow "install-git-semver.yml"
 
 echo ""
