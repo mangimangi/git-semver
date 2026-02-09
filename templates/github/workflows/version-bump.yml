@@ -5,6 +5,10 @@
 # Thin wrapper around git-semver — handles triggers and auth,
 # the script handles everything else.
 #
+# Supports subdirectory configs for monorepo versioning.
+# On merge: checks all components (root + subdirectories) and bumps triggered ones.
+# On dispatch: bumps a specific component (root or named subdirectory).
+#
 # Skips automated commits (chore: bump version, chore: install).
 # Uses GITHUB_TOKEN — no PAT required for the core versioning flow.
 
@@ -24,6 +28,10 @@ on:
           - patch
           - minor
           - major
+      subdirectory:
+        description: 'Subdirectory to bump (leave empty for root)'
+        required: false
+        type: string
       changelog_description:
         description: 'Changelog entry (what changed in this release)'
         required: false
@@ -52,88 +60,102 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Read on_merge config
-        if: github.event_name == 'push'
+      - name: Read config
         id: config
         run: |
           ON_MERGE="true"
+          AUTOMERGE="true"
           if [ -f .semver/config.json ]; then
             ON_MERGE=$(python3 -c "
           import json
           c = json.load(open('.semver/config.json'))
           print(str(c.get('install', {}).get('on_merge', True)).lower())
           " 2>/dev/null || echo "true")
-          fi
-          echo "on_merge=$ON_MERGE" >> $GITHUB_OUTPUT
-
-      - name: Check for version-triggering changes
-        if: github.event_name == 'push' && steps.config.outputs.on_merge == 'true'
-        id: check
-        run: |
-          BEFORE="${{ github.event.before }}"
-          set +e
-          .semver/git-semver check --since "$BEFORE"
-          rc=$?
-          set -e
-          if [ $rc -eq 0 ]; then
-            echo "triggered=true" >> $GITHUB_OUTPUT
-          elif [ $rc -eq 1 ]; then
-            echo "triggered=false" >> $GITHUB_OUTPUT
-          else
-            echo "::error::git-semver check failed with exit code $rc"
-            exit $rc
-          fi
-
-      - name: Read automerge config
-        if: github.event_name == 'workflow_dispatch' || steps.check.outputs.triggered == 'true'
-        id: automerge
-        run: |
-          AUTOMERGE="true"
-          if [ -f .semver/config.json ]; then
             AUTOMERGE=$(python3 -c "
           import json
           c = json.load(open('.semver/config.json'))
           print(str(c.get('install', {}).get('automerge', True)).lower())
           " 2>/dev/null || echo "true")
           fi
+          echo "on_merge=$ON_MERGE" >> $GITHUB_OUTPUT
           echo "automerge=$AUTOMERGE" >> $GITHUB_OUTPUT
 
-      - name: Bump version (direct push)
-        if: (github.event_name == 'workflow_dispatch' || steps.check.outputs.triggered == 'true') && steps.automerge.outputs.automerge == 'true'
+      # On push: check all components and bump triggered ones
+      - name: Bump triggered components (direct push)
+        if: >-
+          github.event_name == 'push' &&
+          steps.config.outputs.on_merge == 'true' &&
+          steps.config.outputs.automerge == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          .semver/git-semver bump-all --since "${{ github.event.before }}"
+
+      - name: Bump triggered components (PR mode)
+        if: >-
+          github.event_name == 'push' &&
+          steps.config.outputs.on_merge == 'true' &&
+          steps.config.outputs.automerge == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BEFORE_SHA="${{ github.sha }}"
+          .semver/git-semver bump-all --since "${{ github.event.before }}" --no-push
+
+          if [ "$(git rev-parse HEAD)" != "$BEFORE_SHA" ]; then
+            BRANCH="chore/bump-version-$(date +%s)"
+            git checkout -b "$BRANCH"
+            git push -u origin "$BRANCH"
+            gh pr create \
+              --title "$(git log -1 --pretty=%s)" \
+              --body "Automated version bump" \
+              --base main
+          fi
+
+      # On dispatch: bump a specific component
+      - name: Bump version (direct push - dispatch)
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.config.outputs.automerge == 'true'
         env:
           BUMP_TYPE: ${{ inputs.bump_type || 'patch' }}
+          SUBDIR: ${{ inputs.subdirectory || '' }}
           DESCRIPTION: ${{ inputs.changelog_description || '' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ -n "$DESCRIPTION" ]; then
-            .semver/git-semver bump "$BUMP_TYPE" --description "$DESCRIPTION"
-          else
-            .semver/git-semver bump "$BUMP_TYPE"
-          fi
+          ARGS="$BUMP_TYPE"
+          [ -n "$SUBDIR" ] && ARGS="$ARGS --subdir $SUBDIR"
+          [ -n "$DESCRIPTION" ] && ARGS="$ARGS --description \"$DESCRIPTION\""
+          eval .semver/git-semver bump $ARGS
 
-      - name: Bump version (PR mode)
-        if: (github.event_name == 'workflow_dispatch' || steps.check.outputs.triggered == 'true') && steps.automerge.outputs.automerge == 'false'
+      - name: Bump version (PR mode - dispatch)
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.config.outputs.automerge == 'false'
         env:
           BUMP_TYPE: ${{ inputs.bump_type || 'patch' }}
+          SUBDIR: ${{ inputs.subdirectory || '' }}
           DESCRIPTION: ${{ inputs.changelog_description || '' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ -n "$DESCRIPTION" ]; then
-            .semver/git-semver bump "$BUMP_TYPE" --no-push --description "$DESCRIPTION"
-          else
-            .semver/git-semver bump "$BUMP_TYPE" --no-push
-          fi
+          ARGS="$BUMP_TYPE --no-push"
+          [ -n "$SUBDIR" ] && ARGS="$ARGS --subdir $SUBDIR"
+          [ -n "$DESCRIPTION" ] && ARGS="$ARGS --description \"$DESCRIPTION\""
+          eval .semver/git-semver bump $ARGS
 
-          VERSION=$(cat VERSION)
-          BRANCH="chore/bump-version-v${VERSION}"
+          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "unknown")
+          BRANCH="chore/bump-version-${TAG//\//-}"
           git checkout -b "$BRANCH"
           git push -u origin "$BRANCH"
           gh pr create \
-            --title "chore: bump version to v${VERSION}" \
-            --body "Automated version bump to v${VERSION}" \
+            --title "chore: bump version to ${TAG}" \
+            --body "Automated version bump to ${TAG}" \
             --base main

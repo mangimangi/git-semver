@@ -1,0 +1,29 @@
+# .github/workflows/test.yml
+# Runs unit tests on pull requests to ensure code quality before merge.
+
+name: Tests
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-cov
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v \
+            --cov --cov-report=term-missing \
+            --cov-config=pyproject.toml

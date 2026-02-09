@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+include = ["git-semver"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
