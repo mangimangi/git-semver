@@ -1,0 +1,210 @@
+# .github/workflows/check-pearls-impl.yml
+# Ensures PRs don't modify pearls implementation files
+#
+# Skips for install PRs (branch starts with 'chore/install-pearls') since
+# those are the legitimate mechanism for updating installed files.
+#
+# Implementation files should only be updated via the install-pearls workflow
+# or by re-running the install script. Direct edits to prl.py in installed
+# copies should go through the main pearls repository instead.
+#
+# Protected: all of .pearls/ EXCEPT these allowed data/config files:
+#   - .pearls/issues.jsonl (issue data)
+#   - .pearls/archive/*.jsonl (archived issues)
+#   - .pearls/config.json (project configuration)
+#   - .pearls/.prl-version (auto-updated by install script)
+#   - .pearls/AGENTS.md (when install.agents_md is false — consumer maintains their own)
+#
+# Also protected: .semver/ implementation files (installed by git-semver):
+#   - Allowed: .semver/config.json (project configuration)
+#   - Allowed: .semver/.version (auto-updated by install script)
+#   - Protected: everything else (.semver/git-semver, etc.)
+#
+# Also protected (conditional on install config):
+#   - .claude/hooks/configure-prl.sh (when install.hooks is true)
+#   - .github/workflows/*.yml (granular per install.workflows.*)
+
+name: Check Pearls Implementation
+
+on:
+  pull_request:
+    paths:
+      - '.pearls/**'
+      - '.semver/**'
+      - '.claude/hooks/configure-prl.sh'
+      - '.github/workflows/install-pearls.yml'
+      - '.github/workflows/check-pearls-impl.yml'
+
+jobs:
+  check-impl-files:
+    if: >-
+      !startsWith(github.head_ref, 'chore/install-pearls') &&
+      !startsWith(github.head_ref, 'chore/install-git-semver')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read install config
+        id: config
+        run: |
+          INSTALL_WF_CHECK_IMPL="false"
+          INSTALL_WF_ANY="false"
+          INSTALL_HOOKS="true"
+          INSTALL_AGENTS_MD="true"
+          if [ -f .pearls/config.json ]; then
+            eval "$(python3 -c "
+          import json; c=json.load(open('.pearls/config.json'))
+          w=c.get('install',{}).get('workflows', {})
+          if isinstance(w, bool):
+              print(f'INSTALL_WF_CHECK_IMPL={str(w).lower()}')
+          else:
+              print(f'INSTALL_WF_CHECK_IMPL={str(w.get(\"check_pearls_impl\", False)).lower()}')
+          " 2>/dev/null || echo "INSTALL_WF_CHECK_IMPL=false")"
+            INSTALL_HOOKS=$(python3 -c "
+          import json; c=json.load(open('.pearls/config.json'))
+          i=c.get('install',{})
+          fallback=i.get('templates', True)
+          print(str(i.get('hooks', fallback)).lower())
+          " 2>/dev/null || echo "true")
+            INSTALL_AGENTS_MD=$(python3 -c "
+          import json; c=json.load(open('.pearls/config.json'))
+          i=c.get('install',{})
+          fallback=i.get('templates', True)
+          print(str(i.get('agents_md', fallback)).lower())
+          " 2>/dev/null || echo "true")
+          fi
+          if [ "$INSTALL_WF_CHECK_IMPL" = "true" ]; then
+            INSTALL_WF_ANY="true"
+          fi
+          echo "install_wf_check_impl=$INSTALL_WF_CHECK_IMPL" >> $GITHUB_OUTPUT
+          echo "install_wf_any=$INSTALL_WF_ANY" >> $GITHUB_OUTPUT
+          echo "install_hooks=$INSTALL_HOOKS" >> $GITHUB_OUTPUT
+          echo "install_agents_md=$INSTALL_AGENTS_MD" >> $GITHUB_OUTPUT
+
+      - name: Check for implementation file changes
+        id: check
+        run: |
+          # Get list of changed files in PR
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+          # Allowed .pearls/ files (data and config, not implementation)
+          ALLOWED_PEARLS=(
+            ".pearls/issues.jsonl"
+            ".pearls/config.json"
+            ".pearls/.prl-version"
+          )
+
+          # AGENTS.md is allowed when install.agents_md is false (consumer maintains their own)
+          if [ "${{ steps.config.outputs.install_agents_md }}" != "true" ]; then
+            ALLOWED_PEARLS+=(".pearls/AGENTS.md")
+          fi
+
+          VIOLATIONS=""
+
+          # Check all .pearls/ changes — any file not in ALLOWED is a violation
+          while IFS= read -r file; do
+            # Allow archive JSONL files
+            if [[ "$file" == .pearls/archive/*.jsonl ]]; then
+              continue
+            fi
+            ALLOWED=false
+            for allowed in "${ALLOWED_PEARLS[@]}"; do
+              if [ "$file" = "$allowed" ]; then
+                ALLOWED=true
+                break
+              fi
+            done
+            if [ "$ALLOWED" = false ]; then
+              VIOLATIONS="$VIOLATIONS- $file\n"
+            fi
+          done < <(echo "$CHANGED_FILES" | grep "^\.pearls/" || true)
+
+          # Check all .semver/ changes — config.json and .version are allowed
+          ALLOWED_SEMVER=(
+            ".semver/config.json"
+            ".semver/.version"
+          )
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            ALLOWED=false
+            for allowed in "${ALLOWED_SEMVER[@]}"; do
+              if [ "$file" = "$allowed" ]; then
+                ALLOWED=true
+                break
+              fi
+            done
+            if [ "$ALLOWED" = false ]; then
+              VIOLATIONS="$VIOLATIONS- $file\n"
+            fi
+          done < <(echo "$CHANGED_FILES" | grep "^\.semver/" || true)
+
+          # Hook - protected when install.hooks is true
+          if [ "${{ steps.config.outputs.install_hooks }}" = "true" ]; then
+            if echo "$CHANGED_FILES" | grep -q "^\.claude/hooks/configure-prl\.sh$"; then
+              VIOLATIONS="$VIOLATIONS- .claude/hooks/configure-prl.sh\n"
+            fi
+          fi
+
+          # Core workflow files - protected when any workflow toggle is true
+          if [ "${{ steps.config.outputs.install_wf_any }}" = "true" ]; then
+            for workflow in install-pearls.yml; do
+              if echo "$CHANGED_FILES" | grep -q "^\.github/workflows/${workflow}$"; then
+                VIOLATIONS="$VIOLATIONS- .github/workflows/$workflow\n"
+              fi
+            done
+          fi
+
+          # Check-pearls-impl workflow file - protected when check_pearls_impl is true
+          if [ "${{ steps.config.outputs.install_wf_check_impl }}" = "true" ]; then
+            if echo "$CHANGED_FILES" | grep -q "^\.github/workflows/check-pearls-impl\.yml$"; then
+              VIOLATIONS="$VIOLATIONS- .github/workflows/check-pearls-impl.yml\n"
+            fi
+          fi
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            {
+              echo "violations<<VIOLATIONS_EOF"
+              echo -e "$VIOLATIONS"
+              echo "VIOLATIONS_EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Report violations
+        if: steps.check.outputs.found == 'true'
+        run: |
+          echo "::error::Pearls implementation files should not be modified directly!"
+          echo ""
+          echo "The following implementation files were changed:"
+          echo -e "${{ steps.check.outputs.violations }}"
+          echo ""
+          echo "These files are installed from the pearls source repository and should"
+          echo "only be updated via:"
+          echo "  1. The install-pearls.yml workflow (creates a PR automatically)"
+          echo "  2. Re-running the install script manually"
+          echo ""
+          echo "If you need to change pearls functionality, please submit a PR"
+          echo "to the main pearls repository instead."
+          echo ""
+          echo "Allowed changes in .pearls/:"
+          echo "  - issues.jsonl (issue data)"
+          echo "  - config.json (project configuration)"
+          echo "  - .prl-version (version tracking)"
+          echo ""
+          echo "Allowed changes in .semver/:"
+          echo "  - config.json (project configuration)"
+          echo "  - .version (version tracking)"
+          exit 1
+
+      - name: Success
+        if: steps.check.outputs.found == 'false'
+        run: |
+          echo "No implementation files modified. Only allowed changes detected."
+          if [ "${{ steps.config.outputs.install_wf_any }}" != "true" ]; then
+            echo "(install.workflows: false - workflow files not checked)"
+          fi
