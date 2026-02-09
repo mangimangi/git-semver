@@ -20,21 +20,27 @@ This project uses **git-semver** for automatic semantic versioning. Configuratio
 ```bash
 # Check current version
 .semver/git-semver version
+.semver/git-semver version --subdir frontend
 
 # Check if a bump is needed (exit 0 = yes, 1 = no)
 .semver/git-semver check --since HEAD~1
+.semver/git-semver check --since HEAD~1 --subdir frontend
 
 # Bump version locally (patch/minor/major)
 .semver/git-semver bump patch
 .semver/git-semver bump minor --no-push
 .semver/git-semver bump major --no-push --description "Breaking change description"
+.semver/git-semver bump patch --subdir frontend
+
+# Check all components and bump triggered ones (used by CI)
+.semver/git-semver bump-all --since HEAD~5
 ```
 
 ## How Versioning Works
 
-1. **On merge to main**: `version-bump.yml` runs `git-semver check` against files changed in the push
-2. **If matched**: `git-semver bump patch` runs automatically — updates version file, configured files, changelog, commits, tags, and pushes
-3. **Manual releases**: trigger `version-bump.yml` via workflow_dispatch for minor/major bumps
+1. **On merge to main**: `version-bump.yml` runs `git-semver bump-all` to check all components (root + subdirectories) against files changed in the push
+2. **If matched**: bumps automatically — updates version files, configured files, changelogs, commits, tags, and pushes
+3. **Manual releases**: trigger `version-bump.yml` via workflow_dispatch for minor/major bumps (with optional subdirectory selector)
 
 ### What triggers a bump
 
@@ -73,5 +79,6 @@ Edit `.semver/config.json` to control versioning:
 - **`files`**: glob patterns for files that trigger automatic patch bumps
 - **`updates`**: files to update with the new version string on bump
 - **`changelog`**: changelog generation settings (set to `false` to disable)
+- **Subdirectory keys**: any non-reserved top-level key with a dict value is a subdirectory config (for monorepo support). Tags become `<subdir>/vX.Y.Z`.
 
 See the [git-semver README](https://github.com/USER/git-semver#configuration) for the full config reference.
