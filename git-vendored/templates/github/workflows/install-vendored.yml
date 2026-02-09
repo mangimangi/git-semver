@@ -116,9 +116,7 @@ jobs:
             # Multi-vendor: combined branch and PR
             BRANCH="chore/install-vendors"
             TITLE="chore: install vendor updates"
-            BODY="Automated vendor updates.
-
-          **Updated:** ${VENDOR//+/, }"
+            BODY=$(printf "Automated vendor updates.\n\n**Updated:** %s" "${VENDOR//+/, }")
           else
             # Single vendor: per-vendor branch from config
             INSTALL_BRANCH=$(python3 -c "
@@ -130,9 +128,7 @@ jobs:
 
             BRANCH="${INSTALL_BRANCH}-v${NEW_VER}"
             TITLE="chore: install ${VENDOR} v${NEW_VER}"
-            BODY="Automated vendor update for **${VENDOR}**.
-
-          **Version:** \`${OLD_VER}\` → \`${NEW_VER}\`"
+            BODY=$(printf "Automated vendor update for **%s**.\n\n**Version:** \`%s\` → \`%s\`" "$VENDOR" "$OLD_VER" "$NEW_VER")
           fi
 
           git checkout -b "$BRANCH"
