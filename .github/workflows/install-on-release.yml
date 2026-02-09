@@ -1,0 +1,26 @@
+# .github/workflows/install-on-release.yml
+# Dogfooding: triggers install-git-semver after a release.
+#
+# This workflow is NOT installed to consumer repos. It exists only in the
+# git-semver source repo to enable the self-update chain:
+#   version-bump → release → install-on-release → install-git-semver
+
+name: Install on Release
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+  workflows: write
+
+jobs:
+  install:
+    if: github.event.workflow_run.conclusion == 'success'
+    uses: ./.github/workflows/install-git-semver.yml
+    with:
+      version: latest
