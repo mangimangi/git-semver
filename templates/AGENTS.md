@@ -9,11 +9,18 @@ This project uses **git-semver** for automatic semantic versioning. Configuratio
 
 | Installed path | Edit? | Notes |
 |---------------|-------|-------|
-| `.semver/git-semver` | **NO** | Core script — update via install workflow |
+| `.semver/git-semver` | **NO** | Core script — update via install-vendored |
 | `.github/workflows/version-bump.yml` | **NO** | Installed workflow |
-| `.github/workflows/install-git-semver.yml` | **NO** | Installed workflow |
 | `.semver/config.json` | **YES** | Your versioning config |
 | `.semver/.version` | **NO** | Auto-managed version tracker |
+| `.vendored/install` | **NO** | Vendor install script — update via install-vendored |
+| `.vendored/check` | **NO** | Vendor protection script — update via install-vendored |
+| `.vendored/config.json` | **YES** | Vendor registry — add/configure vendors here |
+| `.vendored/.version` | **NO** | Auto-managed version tracker |
+| `.dogfood/resolve` | **NO** | Dogfood resolver — update via install-vendored |
+| `.github/workflows/install-vendored.yml` | **NO** | Installed workflow |
+| `.github/workflows/check-vendor.yml` | **NO** | Installed workflow |
+| `.github/workflows/dogfood.yml` | **NO** | Installed workflow |
 
 ## Quick Reference
 

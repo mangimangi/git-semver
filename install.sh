@@ -64,7 +64,27 @@ install_workflow() {
 
 # Install workflow templates (skipped if already present)
 install_workflow "version-bump.yml"
-install_workflow "install-git-semver.yml"
+
+# Register with git-vendored if present
+if [ -f .vendored/config.json ]; then
+    python3 -c "
+import json
+with open('.vendored/config.json') as f:
+    config = json.load(f)
+config.setdefault('vendors', {})
+config['vendors']['git-semver'] = {
+    'repo': '$SEMVER_REPO',
+    'install_branch': 'chore/install-git-semver',
+    'dogfood': True,
+    'protected': ['.semver/**'],
+    'allowed': ['.semver/config.json', '.semver/.version']
+}
+with open('.vendored/config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+"
+    echo "Registered git-semver in .vendored/config.json"
+fi
 
 echo ""
 echo "Done! git-semver v$VERSION installed."
