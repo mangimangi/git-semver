@@ -6,7 +6,6 @@
 #
 # Usage:
 #   - Trigger manually from the Actions tab (optionally specify a version)
-#   - Runs on a configurable schedule (default: Mondays at 9am UTC)
 
 name: Install git-semver
 
@@ -24,8 +23,6 @@ on:
         required: false
         default: 'latest'
         type: string
-  schedule:
-    - cron: 'INSTALL_SCHEDULE'
 
 permissions:
   contents: write
