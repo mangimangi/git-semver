@@ -27,7 +27,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  workflows: write
 
 env:
   SEMVER_REPO: USER/git-semver
