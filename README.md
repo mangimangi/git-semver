@@ -39,7 +39,6 @@ your-project/
 └── .github/
     └── workflows/
         ├── version-bump.yml          # Auto-bump on merge
-        ├── is-version-bump.yml       # Reusable: detect bump commits
         └── install-git-semver.yml    # Self-update workflow
 ```
 
@@ -143,7 +142,7 @@ Flags peel back layers:
   },
   "install": {
     "on_merge": true,
-    "automerge_version_bumps": true,
+    "automerge": true,
     "schedule": "0 9 * * 1"
   }
 }
@@ -187,7 +186,7 @@ When enabled, collects commit messages since the last tag, filters out noise pre
 | Key | Default | Description |
 |-----|---------|-------------|
 | `on_merge` | `true` | Auto-trigger patch bump when `files` change on merge to main. When `false`, bumps are manual-only |
-| `automerge_version_bumps` | `true` | Version bump commits push directly to main. When `false`, creates a PR instead |
+| `automerge` | `true` | Version bump commits push directly to main. When `false`, creates a PR instead |
 | `schedule` | `"0 9 * * 1"` | Cron for `install-git-semver.yml` update checks. Set to `false` to disable |
 
 ## GitHub Actions
@@ -200,21 +199,7 @@ Thin wrapper around `git-semver` — handles triggers and auth, the script handl
 - **Manual trigger**: `workflow_dispatch` with `bump_type` and optional `changelog_description`. Always bumps (skips the check).
 - **Auto bumps are patches only.** Minor and major require manual dispatch.
 - **Direct push mode** (default): `git-semver bump` pushes directly to main.
-- **PR mode**: when `automerge_version_bumps: false`, creates a branch and PR instead.
-
-### is-version-bump.yml
-
-Reusable workflow. Returns `is_version_bump: true|false` based on commit message prefix `chore: bump version`. Pure shell — no dependency on the core script.
-
-```yaml
-# Use in your workflows:
-jobs:
-  check:
-    uses: ./.github/workflows/is-version-bump.yml
-  your-job:
-    needs: check
-    if: needs.check.outputs.is_version_bump == 'false'
-```
+- **PR mode**: when `automerge: false`, creates a branch and PR instead.
 
 ### install-git-semver.yml
 
@@ -228,7 +213,6 @@ Self-update workflow:
 | Workflow | Auth | Notes |
 |----------|------|-------|
 | `version-bump.yml` | `GITHUB_TOKEN` | No PAT required |
-| `is-version-bump.yml` | `GITHUB_TOKEN` | Just reads commit message |
 | `install-git-semver.yml` | `GITHUB_TOKEN` (or PAT) | PAT only needed if branch protection requires checks on PRs |
 
 ## File Classification
@@ -237,7 +221,6 @@ Self-update workflow:
 |------|------|-----------|
 | `.semver/git-semver` | Implementation | No — update via install workflow |
 | `.github/workflows/version-bump.yml` | Workflow | No — update via install workflow |
-| `.github/workflows/is-version-bump.yml` | Workflow | No — update via install workflow |
 | `.github/workflows/install-git-semver.yml` | Workflow | No — update via install workflow |
 | `.semver/config.json` | Config | Yes — your settings |
 | `.semver/.version` | Meta | Auto-managed |
@@ -248,7 +231,7 @@ Workflows rely on commit message prefixes for loop prevention:
 
 | Prefix | Purpose |
 |--------|---------|
-| `chore: bump version` | Version bump commit — skipped by version-bump.yml, detected by is-version-bump.yml |
+| `chore: bump version` | Version bump commit — skipped by version-bump.yml |
 | `chore: install` | Install PR commits — skipped by version-bump.yml |
 
 ## How it Differs

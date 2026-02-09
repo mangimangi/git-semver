@@ -11,7 +11,6 @@ This project uses **git-semver** for automatic semantic versioning. Configuratio
 |---------------|-------|-------|
 | `.semver/git-semver` | **NO** | Core script — update via install workflow |
 | `.github/workflows/version-bump.yml` | **NO** | Installed workflow |
-| `.github/workflows/is-version-bump.yml` | **NO** | Installed workflow |
 | `.github/workflows/install-git-semver.yml` | **NO** | Installed workflow |
 | `.semver/config.json` | **YES** | Your versioning config |
 | `.semver/.version` | **NO** | Auto-managed version tracker |
