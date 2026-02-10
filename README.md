@@ -39,7 +39,7 @@ your-project/
 │   └── .version           # Installed version tracker
 └── .github/
     └── workflows/
-        └── version-bump.yml          # Auto-bump on merge
+        └── version-bump.yml          # Auto-bump + release on merge
 ```
 
 ## Quick Start
@@ -255,14 +255,14 @@ Each component is versioned and tagged independently. On merge, `bump-all` check
 
 ## GitHub Actions
 
-### version-bump.yml
+### version-bump.yml (Bump & Release)
 
-Thin wrapper around `git-semver` — handles triggers and auth, the script handles everything else.
+Combines version bump and GitHub Release creation in a single workflow. This avoids the GitHub Actions limitation where tag pushes made with `GITHUB_TOKEN` don't trigger other workflows.
 
 - **Push trigger**: on merge to main/master. Skips automated commits (`chore: bump version`, `chore: install`). Runs `git-semver bump-all` to check all components (root + subdirectories) and bump triggered ones. Respects `install.on_merge` config.
 - **Manual trigger**: `workflow_dispatch` with `bump_type`, optional `subdirectory`, and optional `changelog_description`. Bumps the specified component (root if subdirectory is empty).
 - **Auto bumps are patches only.** Minor and major require manual dispatch.
-- **Direct push mode** (default): pushes directly to main.
+- **Direct push mode** (default): pushes directly to main, then creates GitHub Releases for each tag.
 - **PR mode**: when `automerge: false`, creates a branch and PR instead.
 
 ### Authentication
@@ -297,13 +297,13 @@ git-semver uses [git-vendored](git-vendored/) for unified install/protection acr
 
 1. **install-vendored.yml** — single workflow handles all vendor updates (schedule, manual, or called by dogfood)
 2. **check-vendor.yml** — runs `.vendored/check` on PRs to block unauthorized vendor file edits
-3. **dogfood.yml** — after a Release, finds the vendor with `dogfood: true` and triggers install-vendored
+3. **dogfood.yml** — after Bump & Release succeeds, finds the vendor with `dogfood: true` and triggers install-vendored
 
 ### Vendor lifecycle
 
 ```
-code change → version-bump → release → dogfood → install-vendored → PR → merge
-              (git-semver)    (git-semver) (git-dogfood) (git-vendored)
+code change → bump & release → dogfood → install-vendored → PR → merge
+              (git-semver)     (git-dogfood) (git-vendored)
 ```
 
 ## File Classification
@@ -329,8 +329,8 @@ Workflows rely on commit message prefixes for loop prevention:
 
 | Prefix | Purpose |
 |--------|---------|
-| `chore: bump version` | Version bump commit — skipped by version-bump.yml |
-| `chore: install` | Install PR commits — skipped by version-bump.yml |
+| `chore: bump version` | Version bump commit — skipped by Bump & Release workflow |
+| `chore: install` | Install PR commits — skipped by Bump & Release workflow |
 
 ## How it Differs
 

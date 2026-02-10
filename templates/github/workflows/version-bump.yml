@@ -1,18 +1,19 @@
 # .github/workflows/version-bump.yml
-# Bumps version when implementation files change on merge to main (patch),
-# or when triggered manually via workflow_dispatch (major|minor|patch).
+# Bumps version and creates GitHub Releases when implementation files change
+# on merge to main (patch), or when triggered manually via workflow_dispatch
+# (major|minor|patch).
 #
-# Thin wrapper around git-semver — handles triggers and auth,
-# the script handles everything else.
+# Combines version bump + release creation in a single workflow to avoid
+# the GITHUB_TOKEN limitation where tag pushes don't trigger other workflows.
 #
 # Supports subdirectory configs for monorepo versioning.
 # On merge: checks all components (root + subdirectories) and bumps triggered ones.
 # On dispatch: bumps a specific component (root or named subdirectory).
 #
 # Skips automated commits (chore: bump version, chore: install).
-# Uses GITHUB_TOKEN — no PAT required for the core versioning flow.
+# Uses GITHUB_TOKEN — no PAT required.
 
-name: Version Bump
+name: Bump & Release
 
 on:
   push:
@@ -46,7 +47,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  version-bump:
+  bump-and-release:
     runs-on: ubuntu-latest
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -159,3 +160,18 @@ jobs:
             --title "chore: bump version to ${TAG}" \
             --body "Automated version bump to ${TAG}" \
             --base main
+
+      # Create GitHub Releases for tags pushed in this run.
+      # Runs after direct-push bump steps; skipped in PR mode (no tags pushed).
+      - name: Create GitHub Releases
+        if: steps.config.outputs.automerge == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for tag in $(git tag --points-at HEAD | grep -v '^latest$'); do
+            echo "Creating release for $tag"
+            gh release create "$tag" \
+              --repo "${{ github.repository }}" \
+              --title "$tag" \
+              --generate-notes
+          done

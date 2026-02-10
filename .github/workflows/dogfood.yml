@@ -1,17 +1,17 @@
 # .github/workflows/dogfood.yml
-# Triggers vendor self-update after a successful Release.
+# Triggers vendor self-update after a successful Bump & Release.
 #
-# Bridges git-semver (Release event) to git-vendored (install-vendored workflow).
+# Bridges git-semver (Bump & Release workflow) to git-vendored (install-vendored).
 # The .dogfood/resolve script finds the vendor with "dogfood": true in
 # .vendored/config.json and triggers install-vendored for that vendor.
 #
-# Chain: version-bump → release → dogfood → install-vendored → PR → merge
+# Chain: bump & release → dogfood → install-vendored → PR → merge
 
 name: Dogfood
 
 on:
   workflow_run:
-    workflows: ["Release"]
+    workflows: ["Bump & Release"]
     types:
       - completed
 

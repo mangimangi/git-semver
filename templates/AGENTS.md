@@ -45,9 +45,9 @@ This project uses **git-semver** for automatic semantic versioning. Configuratio
 
 ## How Versioning Works
 
-1. **On merge to main**: `version-bump.yml` runs `git-semver bump-all` to check all components (root + subdirectories) against files changed in the push
+1. **On merge to main**: the Bump & Release workflow runs `git-semver bump-all` to check all components (root + subdirectories) against files changed in the push
 2. **If matched**: bumps automatically — updates version files, configured files, changelogs, commits, tags, and pushes
-3. **Manual releases**: trigger `version-bump.yml` via workflow_dispatch for minor/major bumps (with optional subdirectory selector)
+3. **Manual releases**: trigger the Bump & Release workflow via workflow_dispatch for minor/major bumps (with optional subdirectory selector)
 
 ### What triggers a bump
 
@@ -59,10 +59,10 @@ These commit prefixes have special meaning:
 
 | Prefix | Purpose |
 |--------|---------|
-| `chore: bump version` | Version bump commit — skipped by version-bump.yml |
-| `chore: install` | Install PR commits — skipped by version-bump.yml |
+| `chore: bump version` | Version bump commit — skipped by Bump & Release workflow |
+| `chore: install` | Install PR commits — skipped by Bump & Release workflow |
 
-Do not use these prefixes for regular work — they cause version-bump.yml to skip the commit.
+Do not use these prefixes for regular work — they cause the Bump & Release workflow to skip the commit.
 
 ## Configuration
 
