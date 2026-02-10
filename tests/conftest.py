@@ -14,18 +14,19 @@ import pytest
 ROOT = Path(__file__).parent.parent
 
 
-def _import_git_semver():
-    """Import the git-semver script (no .py extension) as a Python module."""
-    filepath = str(ROOT / "git-semver")
-    loader = importlib.machinery.SourceFileLoader("git_semver", filepath)
-    spec = importlib.util.spec_from_loader("git_semver", loader, origin=filepath)
+def _import_extensionless(name, filename):
+    """Import a script without .py extension as a Python module."""
+    filepath = str(ROOT / filename)
+    loader = importlib.machinery.SourceFileLoader(name, filepath)
+    spec = importlib.util.spec_from_loader(name, loader, origin=filepath)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["git_semver"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-_import_git_semver()
+_import_extensionless("git_semver", "git-semver")
+_import_extensionless("bump_and_release", "bump-and-release")
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
