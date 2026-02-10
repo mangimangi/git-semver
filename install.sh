@@ -37,10 +37,12 @@ echo "Installing git-semver v$VERSION from $SEMVER_REPO"
 # Create directories
 mkdir -p .semver .github/workflows
 
-# Download core script
+# Download core scripts
 echo "Downloading git-semver..."
 fetch_file "git-semver" ".semver/git-semver"
 chmod +x .semver/git-semver
+fetch_file "bump-and-release" ".semver/bump-and-release"
+chmod +x .semver/bump-and-release
 echo "$VERSION" > .semver/.version
 echo "Installed git-semver v$VERSION"
 

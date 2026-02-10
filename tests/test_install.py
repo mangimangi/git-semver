@@ -13,6 +13,7 @@ INSTALL_SH = ROOT / "install.sh"
 TEMPLATE_VERSION_BUMP = (ROOT / "templates" / "github" / "workflows" / "version-bump.yml").read_text()
 TEMPLATE_CONFIG = (ROOT / "templates" / "semver" / "config.json").read_text()
 CORE_SCRIPT = (ROOT / "git-semver").read_text()
+BUMP_AND_RELEASE = (ROOT / "bump-and-release").read_text()
 
 
 def _stub_install_sh(tmp_path: Path) -> Path:
@@ -26,6 +27,7 @@ def _stub_install_sh(tmp_path: Path) -> Path:
 
     # Populate the local repo mirror with template files
     (repo_dir / "git-semver").write_text(CORE_SCRIPT)
+    (repo_dir / "bump-and-release").write_text(BUMP_AND_RELEASE)
     templates = repo_dir / "templates"
     (templates / "github" / "workflows").mkdir(parents=True)
     (templates / "github" / "workflows" / "version-bump.yml").write_text(TEMPLATE_VERSION_BUMP)
@@ -75,6 +77,7 @@ class TestInstallFreshProject:
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (project / ".semver" / "git-semver").exists()
+        assert (project / ".semver" / "bump-and-release").exists()
         assert (project / ".semver" / ".version").exists()
         assert (project / ".semver" / "config.json").exists()
 
@@ -92,6 +95,9 @@ class TestInstallFreshProject:
 
         mode = (project / ".semver" / "git-semver").stat().st_mode
         assert mode & 0o111, "git-semver should be executable"
+
+        mode = (project / ".semver" / "bump-and-release").stat().st_mode
+        assert mode & 0o111, "bump-and-release should be executable"
 
     def test_installs_workflow_templates(self, tmp_path):
         script = _stub_install_sh(tmp_path)
