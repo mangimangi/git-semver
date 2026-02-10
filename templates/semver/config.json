@@ -1,9 +1,9 @@
 {
   "version_file": "VERSION",
-  "files": [],
-  "_comment_files": "Glob patterns for files whose changes trigger automatic patch bumps (e.g. 'src/**/*.py')",
-  "updates": {},
-  "_comment_updates": "Files to update with new version on bump. 'file' replaces entire file; ['pattern'] does find-and-replace",
+  "_comment_version_file": "File that stores the current version string (default: VERSION)",
   "changelog": true,
-  "_comment_subdirs": "Add subdirectory configs as top-level keys for monorepo support. Tags become <subdir>/vX.Y.Z. Example: \"frontend\": { \"version_file\": \"frontend/VERSION\", \"files\": [...], \"updates\": {...} }"
+  "_comment_changelog": "Generate CHANGELOG.md on bump. Set false to disable, or use {\"file\": \"CHANGES.md\", \"ignore_prefixes\": [\"chore:\"]}",
+  "_comment_files": "Optional: glob patterns for files whose changes trigger automatic patch bumps on merge. Example: \"files\": [\"src/**/*.py\", \"lib/**/*.js\"]",
+  "_comment_updates": "Optional: files to update with new version on bump. \"file\" replaces entire file; [\"pattern\"] does find-and-replace. Example: \"updates\": {\"setup.py\": [\"version = \"]}",
+  "_comment_subdirs": "Optional: add subdirectory configs as top-level keys for monorepo support. Tags become <subdir>/vX.Y.Z. Example: \"frontend\": {\"version_file\": \"frontend/VERSION\", \"files\": [\"frontend/**/*.js\"]}"
 }
