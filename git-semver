@@ -42,18 +42,6 @@ def load_config(config_path=None):
         raise SemverError(f"Config not found: {path}")
     with open(path) as f:
         config = json.load(f)
-    subdirs = get_subdirectories(config)
-    if not subdirs:
-        if "files" not in config:
-            raise SemverError("'files' key required in config")
-        if "updates" not in config:
-            raise SemverError("'updates' key required in config")
-    # Validate subdirectory configs
-    for name, subconfig in subdirs.items():
-        if "files" not in subconfig:
-            raise SemverError(f"'files' key required in subdirectory config '{name}'")
-        if "updates" not in subconfig:
-            raise SemverError(f"'updates' key required in subdirectory config '{name}'")
     return config
 
 
@@ -493,8 +481,7 @@ def cmd_bump_all(args):
     bumps = []  # list of (subdir, old_ver, new_ver, tag)
 
     # Check root config
-    root_has_versioning = "files" in config and "updates" in config
-    if root_has_versioning and config["files"]:
+    if config.get("files"):
         matches = check_files_changed(changed, config["files"])
         if matches:
             for filepath, pattern in matches:

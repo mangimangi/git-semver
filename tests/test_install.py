@@ -11,6 +11,7 @@ INSTALL_SH = ROOT / "install.sh"
 
 # Template content that install.sh would fetch from the repo
 TEMPLATE_VERSION_BUMP = (ROOT / "templates" / "github" / "workflows" / "version-bump.yml").read_text()
+TEMPLATE_RELEASE = (ROOT / "templates" / "github" / "workflows" / "release.yml").read_text()
 TEMPLATE_CONFIG = (ROOT / "templates" / "semver" / "config.json").read_text()
 CORE_SCRIPT = (ROOT / "git-semver").read_text()
 
@@ -29,6 +30,7 @@ def _stub_install_sh(tmp_path: Path) -> Path:
     templates = repo_dir / "templates"
     (templates / "github" / "workflows").mkdir(parents=True)
     (templates / "github" / "workflows" / "version-bump.yml").write_text(TEMPLATE_VERSION_BUMP)
+    (templates / "github" / "workflows" / "release.yml").write_text(TEMPLATE_RELEASE)
     (templates / "semver").mkdir(parents=True)
     (templates / "semver" / "config.json").write_text(TEMPLATE_CONFIG)
 
@@ -100,6 +102,7 @@ class TestInstallFreshProject:
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (project / ".github" / "workflows" / "version-bump.yml").exists()
+        assert (project / ".github" / "workflows" / "release.yml").exists()
 
     def test_output_reports_success(self, tmp_path):
         script = _stub_install_sh(tmp_path)
@@ -122,6 +125,7 @@ class TestInstallExistingProject:
         wf_dir = project / ".github" / "workflows"
         wf_dir.mkdir(parents=True)
         (wf_dir / "version-bump.yml").write_text("custom: true\n")
+        (wf_dir / "release.yml").write_text("custom-release: true\n")
 
         result = subprocess.run(
             ["bash", str(script), "1.2.3"],
@@ -133,6 +137,7 @@ class TestInstallExistingProject:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         # Existing files should be preserved
         assert (wf_dir / "version-bump.yml").read_text() == "custom: true\n"
+        assert (wf_dir / "release.yml").read_text() == "custom-release: true\n"
         assert "already exists, skipping" in result.stdout
 
     def test_preserves_existing_config(self, tmp_path):

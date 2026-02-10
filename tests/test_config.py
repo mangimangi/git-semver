@@ -19,14 +19,22 @@ class TestLoadConfig:
         assert config["updates"] == {"VERSION": "file"}
 
     def test_missing_files_key(self, make_config):
+        """files key is optional — config loads fine without it."""
         path = make_config({"updates": {"VERSION": "file"}})
-        with pytest.raises(git_semver.SemverError, match="'files' key required in config"):
-            git_semver.load_config(path)
+        config = git_semver.load_config(path)
+        assert config["updates"] == {"VERSION": "file"}
 
     def test_missing_updates_key(self, make_config):
+        """updates key is optional — config loads fine without it."""
         path = make_config({"files": ["*.py"]})
-        with pytest.raises(git_semver.SemverError, match="'updates' key required in config"):
-            git_semver.load_config(path)
+        config = git_semver.load_config(path)
+        assert config["files"] == ["*.py"]
+
+    def test_minimal_config(self, make_config):
+        """Minimal config with only version_file is valid."""
+        path = make_config({"version_file": "VERSION"})
+        config = git_semver.load_config(path)
+        assert config["version_file"] == "VERSION"
 
     def test_config_with_subdirectories(self, make_config):
         path = make_config({
@@ -52,28 +60,24 @@ class TestLoadConfig:
         assert "frontend" in config
 
     def test_subdirectory_missing_files(self, make_config):
+        """files key is optional in subdirectory configs."""
         path = make_config({
             "frontend": {
                 "updates": {"frontend/VERSION": "file"},
             },
         })
-        with pytest.raises(
-            git_semver.SemverError,
-            match="'files' key required in subdirectory config 'frontend'",
-        ):
-            git_semver.load_config(path)
+        config = git_semver.load_config(path)
+        assert "frontend" in config
 
     def test_subdirectory_missing_updates(self, make_config):
+        """updates key is optional in subdirectory configs."""
         path = make_config({
             "frontend": {
                 "files": ["frontend/**/*.js"],
             },
         })
-        with pytest.raises(
-            git_semver.SemverError,
-            match="'updates' key required in subdirectory config 'frontend'",
-        ):
-            git_semver.load_config(path)
+        config = git_semver.load_config(path)
+        assert "frontend" in config
 
     def test_multiple_subdirectories(self, make_config):
         path = make_config({

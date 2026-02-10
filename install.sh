@@ -10,7 +10,7 @@
 #
 # Behavior:
 #   - Always updates: .semver/git-semver (core script), .semver/.version
-#   - First install only: workflow templates to .github/workflows/ (skipped if present)
+#   - First install only: workflow templates to .github/workflows/ (version-bump, release; skipped if present)
 #   - Preserves .semver/config.json (only creates if missing)
 #
 set -euo pipefail
@@ -64,6 +64,7 @@ install_workflow() {
 
 # Install workflow templates (skipped if already present)
 install_workflow "version-bump.yml"
+install_workflow "release.yml"
 
 # Register with git-vendored if present
 if [ -f .vendored/config.json ]; then
