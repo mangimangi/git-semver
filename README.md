@@ -34,13 +34,16 @@ The `install-vendored.yml` workflow handles updates for all vendored tools (incl
 ```
 your-project/
 ├── .semver/
-│   ├── git-semver         # Core script (don't edit)
+│   ├── git-semver         # Core versioning script (don't edit)
+│   ├── bump-and-release   # CI orchestration script (don't edit)
 │   ├── config.json        # Your config (edit this!)
 │   └── .version           # Installed version tracker
 └── .github/
     └── workflows/
         └── version-bump.yml          # Auto-bump + release on merge
 ```
+
+The workflow is a thin shell — all logic lives in the scripts. Updates to versioning behavior are delivered via `install-vendored.yml` without modifying the workflow file.
 
 ## Quick Start
 
@@ -259,6 +262,8 @@ Each component is versioned and tagged independently. On merge, `bump-all` check
 
 Combines version bump and GitHub Release creation in a single workflow. This avoids the GitHub Actions limitation where tag pushes made with `GITHUB_TOKEN` don't trigger other workflows.
 
+The workflow is a **thin shell** that passes GitHub context to `.semver/bump-and-release`. All orchestration logic (config reading, bump mode selection, PR creation, release creation) lives in the script, which is updated via the vendor install pipeline — no workflow modifications needed after initial install.
+
 - **Push trigger**: on merge to main/master. Skips automated commits (`chore: bump version`, `chore: install`). Runs `git-semver bump-all` to check all components (root + subdirectories) and bump triggered ones. Respects `install.on_merge` config.
 - **Manual trigger**: `workflow_dispatch` with `bump_type`, optional `subdirectory`, and optional `changelog_description`. Bumps the specified component (root if subdirectory is empty).
 - **Auto bumps are patches only.** Minor and major require manual dispatch.
@@ -311,6 +316,7 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | File | Type | Can Edit? |
 |------|------|-----------|
 | `.semver/git-semver` | Implementation | No — update via install-vendored |
+| `.semver/bump-and-release` | Implementation | No — update via install-vendored |
 | `.semver/config.json` | Config | Yes — your versioning settings |
 | `.semver/.version` | Meta | Auto-managed |
 | `.vendored/install` | Implementation | No — update via install-vendored |

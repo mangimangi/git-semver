@@ -1,6 +1,6 @@
 {
   "version_file": "VERSION",
-  "files": ["git-semver", "install.sh", "templates/github/workflows/version-bump.yml", "templates/AGENTS.md", "templates/semver/config.json"],
+  "files": ["git-semver", "bump-and-release", "install.sh", "templates/github/workflows/version-bump.yml", "templates/AGENTS.md", "templates/semver/config.json"],
   "_comment_files": "Glob patterns for files whose changes trigger automatic patch bumps (e.g. 'src/**/*.py')",
   "changelog": true
 }
