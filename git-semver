@@ -336,6 +336,32 @@ def format_tag(version, subdir=None):
     return f"v{version}"
 
 
+def get_latest_tag_version(subdir=None):
+    """Find the highest version from existing git tags.
+
+    Used to detect when the VERSION file is behind the tag state
+    (e.g., from a queued workflow run that already tagged, or an
+    orphaned tag from a reverted commit).
+
+    Returns (major, minor, patch) tuple or None if no matching tags.
+    """
+    pattern = f"{subdir}/v*" if subdir else "v[0-9]*"
+    result = git("tag", "-l", pattern, check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    prefix = f"{subdir}/v" if subdir else "v"
+    versions = []
+    for tag in result.stdout.strip().split("\n"):
+        if not tag.startswith(prefix):
+            continue
+        version_str = tag[len(prefix):]
+        try:
+            versions.append(parse_version(version_str))
+        except SemverError:
+            continue
+    return max(versions) if versions else None
+
+
 # ── Core bump logic ────────────────────────────────────────────────────────
 
 def bump_component(config, subdir=None, bump_type="patch", description=None):
@@ -352,6 +378,17 @@ def bump_component(config, subdir=None, bump_type="patch", description=None):
     version_file = get_version_file(effective)
     current = read_version(version_file)
     major, minor, patch = parse_version(current)
+
+    # Use the higher of VERSION file or latest tag as baseline.
+    # Handles queued CI runs where a previous run already tagged a higher
+    # version, or orphaned tags from reverted/force-pushed commits.
+    latest_tag = get_latest_tag_version(subdir)
+    if latest_tag and latest_tag > (major, minor, patch):
+        baseline = format_version(*latest_tag)
+        print(f"Note: tag {format_tag(baseline, subdir)} exists ahead of "
+              f"VERSION file ({current}), using as baseline")
+        major, minor, patch = latest_tag
+
     new_major, new_minor, new_patch = compute_new_version(major, minor, patch, bump_type)
     new_version = format_version(new_major, new_minor, new_patch)
     tag = format_tag(new_version, subdir)
