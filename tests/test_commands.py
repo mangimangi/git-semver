@@ -443,6 +443,70 @@ class TestBumpComponent:
         assert new == "2.1.0"
         assert tag == "frontend/v2.1.0"
 
+    def test_tag_ahead_of_version_file(self, make_config, make_version_file, mock_git, capsys):
+        """When a tag exists ahead of VERSION (e.g. queued CI run), use tag as baseline."""
+        path = make_config({
+            "files": [], "updates": {"VERSION": "file"},
+            "changelog": False,
+        })
+        make_version_file("0.2.25")
+
+        # Mock git to return existing tag v0.2.26 from tag -l
+        calls, mock = mock_git
+        tag_result = MagicMock()
+        tag_result.returncode = 0
+        tag_result.stdout = "v0.2.25\nv0.2.26\n"
+
+        def side_effect(*args, **kwargs):
+            if args and args[0] == "tag" and args[1] == "-l":
+                return tag_result
+            r = MagicMock()
+            r.stdout = ""
+            r.returncode = 0
+            return r
+
+        mock.side_effect = side_effect
+
+        subdir, old, new, tag = git_semver.bump_component(
+            git_semver.load_config(path), bump_type="patch",
+        )
+        assert new == "0.2.27"
+        assert tag == "v0.2.27"
+        out = capsys.readouterr().out
+        assert "using as baseline" in out
+
+    def test_tag_at_version_file_no_adjustment(self, make_config, make_version_file, mock_git, capsys):
+        """When the latest tag matches VERSION, no adjustment needed (normal state)."""
+        path = make_config({
+            "files": [], "updates": {"VERSION": "file"},
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+
+        calls, mock = mock_git
+        tag_result = MagicMock()
+        tag_result.returncode = 0
+        tag_result.stdout = "v1.0.0\n"
+
+        def side_effect(*args, **kwargs):
+            if args and args[0] == "tag" and args[1] == "-l":
+                return tag_result
+            r = MagicMock()
+            r.stdout = ""
+            r.returncode = 0
+            return r
+
+        mock.side_effect = side_effect
+
+        subdir, old, new, tag = git_semver.bump_component(
+            git_semver.load_config(path), bump_type="patch",
+        )
+        # Normal bump, no tag adjustment
+        assert new == "1.0.1"
+        assert tag == "v1.0.1"
+        out = capsys.readouterr().out
+        assert "using as baseline" not in out
+
 
 # ── CLI / main ──────────────────────────────────────────────────────────────
 

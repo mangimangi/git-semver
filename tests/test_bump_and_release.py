@@ -97,22 +97,70 @@ class TestReadConfig:
         assert bar.read_config() == (True, True)
 
 
+# ── sync_branch ─────────────────────────────────────────────────────────────
+
+class TestSyncBranch:
+    def test_pulls_ff_only(self, mock_run, env):
+        calls, set_response = mock_run
+        env(GITHUB_REF="refs/heads/main")
+
+        bar.sync_branch()
+
+        pull_calls = [c for c in calls if c[:3] == ("git", "pull", "--ff-only")]
+        assert len(pull_calls) == 1
+        assert pull_calls[0] == ("git", "pull", "--ff-only", "origin", "main")
+
+    def test_uses_branch_from_github_ref(self, mock_run, env):
+        calls, set_response = mock_run
+        env(GITHUB_REF="refs/heads/master")
+
+        bar.sync_branch()
+
+        pull_calls = [c for c in calls if c[:3] == ("git", "pull", "--ff-only")]
+        assert pull_calls[0][-1] == "master"
+
+    def test_defaults_to_main(self, mock_run, env):
+        calls, set_response = mock_run
+        env()  # no GITHUB_REF
+
+        bar.sync_branch()
+
+        pull_calls = [c for c in calls if c[:3] == ("git", "pull", "--ff-only")]
+        assert pull_calls[0][-1] == "main"
+
+    def test_continues_on_pull_failure(self, mock_run, env, capsys):
+        calls, set_response = mock_run
+        env(GITHUB_REF="refs/heads/main")
+        set_response(["git", "pull", "--ff-only", "origin", "main"], returncode=1)
+
+        bar.sync_branch()  # Should not raise
+
+        out = capsys.readouterr().out
+        assert "Warning" in out
+        assert "could not fast-forward" in out
+
+
 # ── handle_push ─────────────────────────────────────────────────────────────
 
 class TestHandlePush:
     def test_automerge_calls_bump_all_and_releases(self, mock_run, env):
         calls, set_response = mock_run
-        env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REPOSITORY="owner/repo")
+        env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REPOSITORY="owner/repo",
+            GITHUB_REF="refs/heads/main")
         set_response(["git", "tag", "--points-at", "HEAD"],
                      stdout="v1.0.1\nlatest\n")
 
         bar.handle_push(automerge=True)
 
-        # Should call: configure_git (2), semver bump-all (1),
+        # Should call: configure_git (2), sync_branch (1), semver bump-all (1),
         # git tag (1), gh release create (1)
         cmds = [c[0] for c in calls]
         assert "git" in cmds         # git config calls
         assert bar.SEMVER_SCRIPT in cmds  # semver call
+
+        # Check sync_branch was called (git pull --ff-only)
+        pull_calls = [c for c in calls if c[:3] == ("git", "pull", "--ff-only")]
+        assert len(pull_calls) == 1
 
         # Check semver was called with bump-all --since
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
@@ -129,22 +177,36 @@ class TestHandlePush:
         calls, set_response = mock_run
         env(
             GITHUB_EVENT_BEFORE="abc123",
-            GITHUB_SHA="old_sha",
+            GITHUB_REF="refs/heads/main",
         )
-        # HEAD changed after bump-all (different from GITHUB_SHA)
-        set_response(["git", "rev-parse", "HEAD"], stdout="new_sha\n")
-        set_response(["git", "log", "-1", "--pretty=%s"],
-                     stdout="chore: bump version v1.0.1\n")
 
-        bar.handle_push(automerge=False)
+        # rev-parse HEAD: first call returns pre_bump sha, second returns new sha
+        rev_parse_results = iter(["pre_sha\n", "new_sha\n"])
+
+        # Replace the mock_run's _run to handle multiple rev-parse calls
+        original_calls = calls
+        responses = {}
+
+        def _run(*cmd, check=True, capture=True):
+            original_calls.append(cmd)
+            if cmd[:2] == ("git", "rev-parse") and cmd[2:] == ("HEAD",):
+                return _make_result(stdout=next(rev_parse_results))
+            if cmd[:2] == ("git", "log"):
+                return _make_result(stdout="chore: bump version v1.0.1\n")
+            return _make_result()
+
+        import bump_and_release as bar_mod
+        from unittest.mock import patch as mock_patch
+        with mock_patch.object(bar_mod, "run", _run):
+            bar.handle_push(automerge=False)
 
         # Check semver was called with --no-push
-        semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
+        semver_calls = [c for c in original_calls if c[0] == bar.SEMVER_SCRIPT]
         assert len(semver_calls) == 1
         assert "--no-push" in semver_calls[0]
 
         # Check PR was created
-        gh_calls = [c for c in calls if c[0] == "gh"]
+        gh_calls = [c for c in original_calls if c[0] == "gh"]
         assert len(gh_calls) == 1
         assert gh_calls[0][:3] == ("gh", "pr", "create")
 
@@ -152,9 +214,9 @@ class TestHandlePush:
         calls, set_response = mock_run
         env(
             GITHUB_EVENT_BEFORE="abc123",
-            GITHUB_SHA="same_sha",
+            GITHUB_REF="refs/heads/main",
         )
-        # HEAD unchanged after bump-all
+        # HEAD unchanged after bump-all (both rev-parse calls return same sha)
         set_response(["git", "rev-parse", "HEAD"], stdout="same_sha\n")
 
         bar.handle_push(automerge=False)
@@ -167,6 +229,22 @@ class TestHandlePush:
         env()  # no GITHUB_EVENT_BEFORE
         with pytest.raises(SystemExit):
             bar.handle_push(automerge=True)
+
+    def test_sync_branch_called_before_bump(self, mock_run, env):
+        """Verify sync_branch runs before semver bump-all."""
+        calls, set_response = mock_run
+        env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REPOSITORY="owner/repo",
+            GITHUB_REF="refs/heads/main")
+        set_response(["git", "tag", "--points-at", "HEAD"], stdout="")
+
+        bar.handle_push(automerge=True)
+
+        # Find indices of pull and semver calls
+        pull_idx = next(i for i, c in enumerate(calls)
+                        if c[:3] == ("git", "pull", "--ff-only"))
+        semver_idx = next(i for i, c in enumerate(calls)
+                          if c[0] == bar.SEMVER_SCRIPT)
+        assert pull_idx < semver_idx
 
 
 # ── handle_dispatch ─────────────────────────────────────────────────────────

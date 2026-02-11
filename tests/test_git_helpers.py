@@ -149,6 +149,74 @@ class TestGetCommitsSinceTag:
         assert commits == []
 
 
+class TestGetLatestTagVersion:
+    def test_no_tags(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = ""
+        mock.return_value = result
+
+        assert git_semver.get_latest_tag_version() is None
+
+    def test_single_tag(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = "v1.2.3\n"
+        mock.return_value = result
+
+        assert git_semver.get_latest_tag_version() == (1, 2, 3)
+
+    def test_multiple_tags_returns_highest(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = "v0.1.0\nv0.2.25\nv0.2.26\nv0.1.5\n"
+        mock.return_value = result
+
+        assert git_semver.get_latest_tag_version() == (0, 2, 26)
+
+    def test_subdir_tags(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = "frontend/v1.0.0\nfrontend/v1.0.1\n"
+        mock.return_value = result
+
+        assert git_semver.get_latest_tag_version(subdir="frontend") == (1, 0, 1)
+        # Verify correct pattern was used
+        assert calls[0][0] == ("tag", "-l", "frontend/v*")
+
+    def test_ignores_invalid_tags(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = "v1.0.0\nv1.0.0-beta\nv2.0.0\nnot-a-version\n"
+        mock.return_value = result
+
+        assert git_semver.get_latest_tag_version() == (2, 0, 0)
+
+    def test_git_command_failure(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 1
+        result.stdout = ""
+        mock.return_value = result
+
+        assert git_semver.get_latest_tag_version() is None
+
+    def test_root_pattern(self, mock_git):
+        calls, mock = mock_git
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = "v1.0.0\n"
+        mock.return_value = result
+
+        git_semver.get_latest_tag_version()
+        assert calls[0][0] == ("tag", "-l", "v[0-9]*")
+
+
 class TestFormatTag:
     def test_root(self):
         assert git_semver.format_tag("1.2.3") == "v1.2.3"
