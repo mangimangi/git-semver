@@ -293,6 +293,91 @@ class TestParseChangelogConfig:
         assert f == "frontend/CHANGELOG.md"
 
 
+class TestVendoredConfigLoading:
+    """Tests for v2 vendored config path resolution."""
+
+    def test_vendored_config_preferred_over_default(self, tmp_repo):
+        """When vendored config exists, it's used over .semver/config.json."""
+        # Create both configs with different content
+        default_config = {"files": ["default/**"]}
+        vendored_config = {"files": ["vendored/**"]}
+
+        (tmp_repo / ".semver" / "config.json").write_text(json.dumps(default_config))
+        vendored_dir = tmp_repo / ".vendored" / "configs"
+        vendored_dir.mkdir(parents=True)
+        (vendored_dir / "git-semver.json").write_text(json.dumps(vendored_config))
+
+        config = git_semver.load_config()
+        assert config["files"] == ["vendored/**"]
+
+    def test_fallback_to_default_when_vendored_missing(self, tmp_repo):
+        """Falls back to .semver/config.json when vendored config doesn't exist."""
+        default_config = {"files": ["default/**"]}
+        (tmp_repo / ".semver" / "config.json").write_text(json.dumps(default_config))
+
+        config = git_semver.load_config()
+        assert config["files"] == ["default/**"]
+
+    def test_vendor_key_filtered(self, tmp_repo):
+        """The _vendor key is filtered from loaded config."""
+        config_data = {
+            "files": ["*.py"],
+            "_vendor": {"name": "git-semver", "version": "1.0.0"},
+        }
+        (tmp_repo / ".semver" / "config.json").write_text(json.dumps(config_data))
+
+        config = git_semver.load_config()
+        assert "_vendor" not in config
+        assert config["files"] == ["*.py"]
+
+    def test_vendor_key_filtered_from_vendored_config(self, tmp_repo):
+        """The _vendor key is filtered when loading from vendored path."""
+        config_data = {
+            "files": ["*.py"],
+            "_vendor": {"name": "git-semver", "version": "1.0.0"},
+        }
+        vendored_dir = tmp_repo / ".vendored" / "configs"
+        vendored_dir.mkdir(parents=True)
+        (vendored_dir / "git-semver.json").write_text(json.dumps(config_data))
+
+        config = git_semver.load_config()
+        assert "_vendor" not in config
+        assert config["files"] == ["*.py"]
+
+    def test_explicit_config_flag_overrides_vendored(self, tmp_repo):
+        """--config flag skips vendored lookup."""
+        vendored_config = {"files": ["vendored/**"]}
+        explicit_config = {"files": ["explicit/**"]}
+
+        vendored_dir = tmp_repo / ".vendored" / "configs"
+        vendored_dir.mkdir(parents=True)
+        (vendored_dir / "git-semver.json").write_text(json.dumps(vendored_config))
+
+        explicit_path = tmp_repo / "custom-config.json"
+        explicit_path.write_text(json.dumps(explicit_config))
+
+        config = git_semver.load_config(str(explicit_path))
+        assert config["files"] == ["explicit/**"]
+
+    def test_subdirectory_detection_unaffected_by_vendor_key(self, tmp_repo):
+        """_vendor key doesn't appear as a subdirectory."""
+        config_data = {
+            "files": ["*.py"],
+            "_vendor": {"name": "git-semver", "version": "1.0.0"},
+            "frontend": {"files": ["frontend/**/*.js"]},
+        }
+        (tmp_repo / ".semver" / "config.json").write_text(json.dumps(config_data))
+
+        config = git_semver.load_config()
+        subdirs = git_semver.get_subdirectories(config)
+        assert "frontend" in subdirs
+        assert "_vendor" not in subdirs
+
+    def test_vendored_config_constant(self):
+        """VENDORED_CONFIG constant points to expected path."""
+        assert git_semver.VENDORED_CONFIG == ".vendored/configs/git-semver.json"
+
+
 class TestParseChangelogValue:
     def test_none(self):
         assert git_semver._parse_changelog_value(None) == (True, "CHANGELOG.md", [])
