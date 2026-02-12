@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 
+VENDORED_CONFIG = ".vendored/configs/git-semver.json"
 DEFAULT_CONFIG_PATH = ".semver/config.json"
 DEFAULT_VERSION_FILE = "VERSION"
 
@@ -36,12 +37,20 @@ class SemverError(Exception):
 # ── Config ──────────────────────────────────────────────────────────────────
 
 def load_config(config_path=None):
-    """Load and validate .semver/config.json."""
-    path = Path(config_path or DEFAULT_CONFIG_PATH)
+    """Load and validate config. Tries vendored path first."""
+    if config_path:
+        path = Path(config_path)
+    else:
+        vendored = Path(VENDORED_CONFIG)
+        path = vendored if vendored.exists() else Path(DEFAULT_CONFIG_PATH)
+
     if not path.exists():
         raise SemverError(f"Config not found: {path}")
     with open(path) as f:
-        config = json.load(f)
+        raw = json.load(f)
+
+    # Filter out framework-owned _vendor key
+    config = {k: v for k, v in raw.items() if k != "_vendor"}
     return config
 
 
