@@ -5,18 +5,23 @@
 #   install.sh <version>
 #
 # Environment:
-#   GH_TOKEN - Used for gh api downloads (required for private repos).
-#              Falls back to curl for public repos when not set.
+#   VENDOR_REF        - Version to install (falls back to positional $1)
+#   VENDOR_REPO       - Source repo (falls back to mangimangi/git-semver)
+#   VENDOR_INSTALL_DIR - Where to install code files (falls back to .semver/)
+#   VENDOR_MANIFEST   - Path to write installed file manifest (optional)
+#   GH_TOKEN          - Used for gh api downloads (required for private repos).
+#                        Falls back to curl for public repos when not set.
 #
 # Behavior:
-#   - Always updates: .semver/git-semver (core script), .semver/.version
+#   - Always updates: git-semver (core script), bump-and-release
 #   - First install only: workflow template to .github/workflows/ (version-bump; skipped if present)
 #   - Preserves .semver/config.json (only creates if missing)
 #
 set -euo pipefail
 
-VERSION="${1:?Usage: install.sh <version>}"
-SEMVER_REPO="mangimangi/git-semver"
+VERSION="${VENDOR_REF:-${1:?Usage: install.sh <version>}}"
+SEMVER_REPO="${VENDOR_REPO:-mangimangi/git-semver}"
+INSTALL_DIR="${VENDOR_INSTALL_DIR:-.semver}"
 
 # File download helper - uses gh api when GH_TOKEN is set, curl otherwise
 fetch_file() {
@@ -34,16 +39,21 @@ fetch_file() {
 
 echo "Installing git-semver v$VERSION from $SEMVER_REPO"
 
+INSTALLED_FILES=()
+
 # Create directories
-mkdir -p .semver .github/workflows
+mkdir -p "$INSTALL_DIR" .semver .github/workflows
 
 # Download core scripts
 echo "Downloading git-semver..."
-fetch_file "git-semver" ".semver/git-semver"
-chmod +x .semver/git-semver
-fetch_file "bump-and-release" ".semver/bump-and-release"
-chmod +x .semver/bump-and-release
-echo "$VERSION" > .semver/.version
+fetch_file "git-semver" "$INSTALL_DIR/git-semver"
+chmod +x "$INSTALL_DIR/git-semver"
+INSTALLED_FILES+=("$INSTALL_DIR/git-semver")
+
+fetch_file "bump-and-release" "$INSTALL_DIR/bump-and-release"
+chmod +x "$INSTALL_DIR/bump-and-release"
+INSTALLED_FILES+=("$INSTALL_DIR/bump-and-release")
+
 echo "Installed git-semver v$VERSION"
 
 # config.json - only create if missing (preserves user settings)
@@ -60,6 +70,7 @@ install_workflow() {
         return
     fi
     if fetch_file "templates/github/workflows/$workflow" ".github/workflows/$workflow" 2>/dev/null; then
+        INSTALLED_FILES+=(".github/workflows/$workflow")
         echo "Installed .github/workflows/$workflow"
     fi
 }
@@ -67,25 +78,9 @@ install_workflow() {
 # Install workflow template (skipped if already present)
 install_workflow "version-bump.yml"
 
-# Register with git-vendored if present
-if [ -f .vendored/config.json ]; then
-    python3 -c "
-import json
-with open('.vendored/config.json') as f:
-    config = json.load(f)
-config.setdefault('vendors', {})
-config['vendors']['git-semver'] = {
-    'repo': '$SEMVER_REPO',
-    'install_branch': 'chore/install-git-semver',
-    'dogfood': True,
-    'protected': ['.semver/**'],
-    'allowed': ['.semver/config.json', '.semver/.version']
-}
-with open('.vendored/config.json', 'w') as f:
-    json.dump(config, f, indent=2)
-    f.write('\n')
-"
-    echo "Registered git-semver in .vendored/config.json"
+# Write manifest when requested by the framework
+if [ -n "${VENDOR_MANIFEST:-}" ]; then
+    printf '%s\n' "${INSTALLED_FILES[@]}" > "$VENDOR_MANIFEST"
 fi
 
 echo ""
