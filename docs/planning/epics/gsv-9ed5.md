@@ -187,12 +187,12 @@ The `--config` CLI flag still works as an explicit override (skips the vendored 
 
 ## Checklist
 
-- [ ] `install.sh`: Use `VENDOR_REF`/`VENDOR_REPO` with positional fallback
-- [ ] `install.sh`: Use `VENDOR_INSTALL_DIR` with `.semver/` fallback for code files
-- [ ] `install.sh`: Track all files in `INSTALLED_FILES` array
-- [ ] `install.sh`: Write `$VENDOR_MANIFEST` when set
-- [ ] `install.sh`: Remove `.semver/.version` write
-- [ ] `install.sh`: Remove `.vendored/config.json` self-registration block
-- [ ] `git-semver`: Update `load_config()` to try vendored config first, filter `_vendor`
-- [ ] Tests: Update for new file paths and env var contract
+- [x] `install.sh`: Use `VENDOR_REF`/`VENDOR_REPO` with positional fallback
+- [x] `install.sh`: Use `VENDOR_INSTALL_DIR` with `.semver/` fallback for code files
+- [x] `install.sh`: Track all files in `INSTALLED_FILES` array
+- [x] `install.sh`: Write `$VENDOR_MANIFEST` when set
+- [x] `install.sh`: Remove `.semver/.version` write
+- [x] `install.sh`: Remove `.vendored/config.json` self-registration block
+- [x] `git-semver`: Update `load_config()` to try vendored config first, filter `_vendor`
+- [x] Tests: Update for new file paths and env var contract
 - [ ] Release: Tag new version

@@ -36,12 +36,13 @@ your-project/
 ├── .semver/
 │   ├── git-semver         # Core versioning script (don't edit)
 │   ├── bump-and-release   # CI orchestration script (don't edit)
-│   ├── config.json        # Your config (edit this!)
-│   └── .version           # Installed version tracker
+│   └── config.json        # Your config (edit this!)
 └── .github/
     └── workflows/
         └── version-bump.yml          # Auto-bump + release on merge
 ```
+
+When installed via the git-vendored v2 framework, code files (`git-semver`, `bump-and-release`) may live in `.vendored/pkg/git-semver/` instead of `.semver/`. Config always stays in `.semver/config.json`.
 
 The workflow is a thin shell — all logic lives in the scripts. Updates to versioning behavior are delivered via `install-vendored.yml` without modifying the workflow file.
 
@@ -318,7 +319,6 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | `.semver/git-semver` | Implementation | No — update via install-vendored |
 | `.semver/bump-and-release` | Implementation | No — update via install-vendored |
 | `.semver/config.json` | Config | Yes — your versioning settings |
-| `.semver/.version` | Meta | Auto-managed |
 | `.vendored/install` | Implementation | No — update via install-vendored |
 | `.vendored/check` | Implementation | No — update via install-vendored |
 | `.vendored/config.json` | Config | Yes — vendor registry |
