@@ -18,7 +18,6 @@
     "git-semver": {
       "repo": "mangimangi/git-semver",
       "install_branch": "chore/install-git-semver",
-      "dogfood": true,
       "protected": [".semver/**", ".github/workflows/version-bump.yml"],
       "allowed": [".semver/config.json"]
     },
