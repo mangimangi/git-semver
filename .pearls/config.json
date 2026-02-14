@@ -1,8 +1,0 @@
-{
-  "prefix": "gsv",
-  "description": "git-semver: automated semantic versioning via GitHub workflows",
-  "docs": ["AGENTS.md", ".pearls/AGENTS.md", "README.md", "docs/"],
-  "models": {
-    "implementer": "claude-opus-4-6"
-  }
-}
