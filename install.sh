@@ -20,6 +20,7 @@
 set -euo pipefail
 
 VERSION="${VENDOR_REF:-${1:?Usage: install.sh <version>}}"
+VERSION="${VERSION#v}"  # strip v prefix if present (VENDOR_REF includes it)
 SEMVER_REPO="${VENDOR_REPO:-mangimangi/git-semver}"
 INSTALL_DIR="${VENDOR_INSTALL_DIR:-.semver}"
 
