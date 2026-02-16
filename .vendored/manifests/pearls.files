@@ -1,0 +1,9 @@
+.claude/hooks/configure.sh
+.claude/settings.json
+.pearls/.gitattributes
+.pearls/.gitignore
+.pearls/hooks/pre-commit
+.pearls/hooks/pre-push
+.vendored/pkg/pearls/AGENTS.md
+.vendored/pkg/pearls/merge-driver.py
+.vendored/pkg/pearls/prl.py
