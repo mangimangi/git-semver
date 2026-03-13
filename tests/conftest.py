@@ -20,6 +20,7 @@ def _import_extensionless(name, filename):
     loader = importlib.machinery.SourceFileLoader(name, filepath)
     spec = importlib.util.spec_from_loader(name, loader, origin=filepath)
     module = importlib.util.module_from_spec(spec)
+    module.__file__ = filepath
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
