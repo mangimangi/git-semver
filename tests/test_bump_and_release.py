@@ -359,6 +359,22 @@ class TestCreateReleases:
         assert len(gh_calls) == 0
 
 
+# ── semver helper ──────────────────────────────────────────────────────────
+
+class TestSemver:
+    def test_passes_capture_false_to_run(self, monkeypatch):
+        """semver() must pass capture=False so git-semver output is visible in CI."""
+        captured_kwargs = {}
+
+        def _run(*cmd, check=True, capture=True):
+            captured_kwargs["capture"] = capture
+            return _make_result()
+
+        monkeypatch.setattr(bar, "run", _run)
+        bar.semver("bump-all", "--since", "abc123")
+        assert captured_kwargs["capture"] is False
+
+
 # ── main ────────────────────────────────────────────────────────────────────
 
 class TestMain:
