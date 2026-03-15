@@ -16,8 +16,7 @@
   "prefix": "gsv",
   "description": "git-semver: automated semantic versioning via GitHub workflows",
   "docs": [
-    "AGENTS.md",
-    ".pearls/AGENTS.md",
+    ".vendored/pkg/pearls/AGENTS.md",
     "README.md",
     "docs/"
   ],
