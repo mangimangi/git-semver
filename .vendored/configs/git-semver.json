@@ -7,7 +7,10 @@
       ".github/workflows/version-bump.yml"
     ],
     "allowed": [
-      ".semver/config.json"
+      ".vendored/configs/git-semver.json"
     ]
-  }
+  },
+  "version_file": "VERSION",
+  "files": ["git-semver", "bump-and-release", "install.sh", "templates/github/workflows/version-bump.yml", "templates/AGENTS.md", "templates/semver/config.json"],
+  "changelog": true
 }
