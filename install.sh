@@ -15,14 +15,14 @@
 # Behavior:
 #   - Always updates: git-semver (core script), bump-and-release
 #   - First install only: workflow template to .github/workflows/ (version-bump; skipped if present)
-#   - Preserves .vendored/configs/git-semver.json (only creates if missing)
+#   - Preserves .semver/config.json (only creates if missing)
 #
 set -euo pipefail
 
 VERSION="${VENDOR_REF:-${1:?Usage: install.sh <version>}}"
 VERSION="${VERSION#v}"  # strip v prefix if present (VENDOR_REF includes it)
 SEMVER_REPO="${VENDOR_REPO:-mangimangi/git-semver}"
-INSTALL_DIR="${VENDOR_INSTALL_DIR:?VENDOR_INSTALL_DIR is required}"
+INSTALL_DIR="${VENDOR_INSTALL_DIR:-.semver}"
 
 # File download helper - uses gh api when GH_TOKEN is set, curl otherwise
 fetch_file() {
@@ -43,7 +43,7 @@ echo "Installing git-semver v$VERSION from $SEMVER_REPO"
 INSTALLED_FILES=()
 
 # Create directories
-mkdir -p "$INSTALL_DIR" .vendored/configs .github/workflows
+mkdir -p "$INSTALL_DIR" .semver .github/workflows
 
 # Download core scripts
 echo "Downloading git-semver..."
@@ -58,9 +58,9 @@ INSTALLED_FILES+=("$INSTALL_DIR/bump-and-release")
 echo "Installed git-semver v$VERSION"
 
 # config - only create if missing (preserves user settings)
-if [ ! -f .vendored/configs/git-semver.json ]; then
-    fetch_file "templates/semver/config.json" ".vendored/configs/git-semver.json"
-    echo "Created .vendored/configs/git-semver.json (configure your file patterns!)"
+if [ ! -f .semver/config.json ]; then
+    fetch_file "templates/semver/config.json" ".semver/config.json"
+    echo "Created .semver/config.json (configure your file patterns!)"
 fi
 
 # Helper to install a workflow file (first install only)
