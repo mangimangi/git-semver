@@ -59,7 +59,17 @@ echo "Installed git-semver v$VERSION"
 
 # config - only create if missing (preserves user settings)
 if [ ! -f .vendored/configs/git-semver.json ]; then
-    fetch_file "templates/semver/config.json" ".vendored/configs/git-semver.json"
+    cat > .vendored/configs/git-semver.json <<ENDOFCONFIG
+{
+  "_vendor": {
+    "repo": "$SEMVER_REPO",
+    "install_branch": "chore/install-git-semver",
+    "protected": [".semver/**"],
+    "allowed": [".vendored/configs/git-semver.json"]
+  },
+  "version_file": "VERSION"
+}
+ENDOFCONFIG
     echo "Created .vendored/configs/git-semver.json (configure your file patterns!)"
 fi
 
