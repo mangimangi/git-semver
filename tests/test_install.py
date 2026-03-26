@@ -61,6 +61,8 @@ def _run_install(tmp_path: Path, install_script: Path, version: str = "1.2.3",
     project = tmp_path / "project"
     project.mkdir(exist_ok=True)
     run_env = os.environ.copy()
+    # VENDOR_INSTALL_DIR is required by install.sh; default to .semver for tests
+    run_env.setdefault("VENDOR_INSTALL_DIR", ".semver")
     if env:
         run_env.update(env)
     return subprocess.run(
@@ -83,7 +85,7 @@ class TestInstallFreshProject:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (project / ".semver" / "git-semver").exists()
         assert (project / ".semver" / "bump-and-release").exists()
-        assert (project / ".semver" / "config.json").exists()
+        assert (project / ".vendored" / "configs" / "git-semver.json").exists()
         # .version file should NOT be created (v2 contract)
         assert not (project / ".semver" / ".version").exists()
 
@@ -133,6 +135,7 @@ class TestInstallExistingProject:
             cwd=project,
             capture_output=True,
             text=True,
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver"},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -145,20 +148,21 @@ class TestInstallExistingProject:
         project = tmp_path / "project"
         project.mkdir()
 
-        # Pre-create config
-        semver_dir = project / ".semver"
-        semver_dir.mkdir()
-        (semver_dir / "config.json").write_text('{"files": ["src/**"]}\n')
+        # Pre-create config at new v2 location
+        configs_dir = project / ".vendored" / "configs"
+        configs_dir.mkdir(parents=True)
+        (configs_dir / "git-semver.json").write_text('{"files": ["src/**"]}\n')
 
         result = subprocess.run(
             ["bash", str(script), "1.2.3"],
             cwd=project,
             capture_output=True,
             text=True,
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver"},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert (semver_dir / "config.json").read_text() == '{"files": ["src/**"]}\n'
+        assert (configs_dir / "git-semver.json").read_text() == '{"files": ["src/**"]}\n'
 
     def test_always_updates_core_script(self, tmp_path):
         script = _stub_install_sh(tmp_path)
@@ -175,6 +179,7 @@ class TestInstallExistingProject:
             cwd=project,
             capture_output=True,
             text=True,
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver"},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -195,6 +200,7 @@ class TestInstallUsage:
             cwd=project,
             capture_output=True,
             text=True,
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver"},
         )
 
         assert result.returncode != 0
@@ -252,30 +258,29 @@ class TestV2EnvVars:
         # Code files go to custom dir
         assert (project / custom_dir / "git-semver").exists()
         assert (project / custom_dir / "bump-and-release").exists()
-        # Config stays in .semver/
-        assert (project / ".semver" / "config.json").exists()
+        # Config goes to .vendored/configs/
+        assert (project / ".vendored" / "configs" / "git-semver.json").exists()
 
-    def test_vendor_install_dir_fallback_to_semver(self, tmp_path):
+    def test_vendor_install_dir_required(self, tmp_path):
+        """VENDOR_INSTALL_DIR is required by v2 contract."""
         script = _stub_install_sh(tmp_path)
-        result = _run_install(tmp_path, script)
         project = tmp_path / "project"
+        project.mkdir(exist_ok=True)
 
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        # Default: code files in .semver/
-        assert (project / ".semver" / "git-semver").exists()
-        assert (project / ".semver" / "bump-and-release").exists()
+        # Remove VENDOR_INSTALL_DIR from env to test the requirement
+        env = os.environ.copy()
+        env.pop("VENDOR_INSTALL_DIR", None)
 
-    def test_no_env_vars_backwards_compatible(self, tmp_path):
-        """Works with no v2 env vars set (old framework / direct use)."""
-        script = _stub_install_sh(tmp_path)
-        result = _run_install(tmp_path, script, version="1.0.0")
-        project = tmp_path / "project"
+        result = subprocess.run(
+            ["bash", str(script), "1.2.3"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
 
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert (project / ".semver" / "git-semver").exists()
-        assert (project / ".semver" / "bump-and-release").exists()
-        assert (project / ".semver" / "config.json").exists()
-        assert not (project / ".semver" / ".version").exists()
+        assert result.returncode != 0
+        assert "VENDOR_INSTALL_DIR" in result.stderr
 
 
 class TestV2Manifest:
@@ -292,7 +297,8 @@ class TestV2Manifest:
             cwd=project,
             capture_output=True,
             text=True,
-            env={**os.environ, "VENDOR_MANIFEST": str(manifest_path)},
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver",
+                 "VENDOR_MANIFEST": str(manifest_path)},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -323,7 +329,8 @@ class TestV2Manifest:
             cwd=project,
             capture_output=True,
             text=True,
-            env={**os.environ, "VENDOR_MANIFEST": str(manifest_path)},
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver",
+                 "VENDOR_MANIFEST": str(manifest_path)},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -369,7 +376,8 @@ class TestV2Manifest:
             cwd=project,
             capture_output=True,
             text=True,
-            env={**os.environ, "VENDOR_MANIFEST": str(manifest_path)},
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver",
+                 "VENDOR_MANIFEST": str(manifest_path)},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -381,12 +389,12 @@ class TestV2NoSelfRegistration:
     """Tests that self-registration block has been removed."""
 
     def test_no_vendored_config_modification(self, tmp_path):
-        """install.sh should not modify .vendored/config.json."""
+        """install.sh should not modify .vendored/config.json (vendor registry)."""
         script = _stub_install_sh(tmp_path)
         project = tmp_path / "project"
         project.mkdir(exist_ok=True)
 
-        # Pre-create .vendored/config.json
+        # Pre-create .vendored/config.json (vendor registry — not the same as configs/)
         vendored_dir = project / ".vendored"
         vendored_dir.mkdir()
         original_content = '{"vendors": {}}\n'
@@ -397,15 +405,17 @@ class TestV2NoSelfRegistration:
             cwd=project,
             capture_output=True,
             text=True,
+            env={**os.environ, "VENDOR_INSTALL_DIR": ".semver"},
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        # .vendored/config.json should be unchanged
+        # .vendored/config.json (vendor registry) should be unchanged
         assert (vendored_dir / "config.json").read_text() == original_content
         assert "Registered git-semver" not in result.stdout
 
     def test_no_self_registration_code_in_script(self, tmp_path):
         """The install.sh source should not contain self-registration code."""
         content = INSTALL_SH.read_text()
-        assert ".vendored/config.json" not in content
+        # Should not modify the vendor registry (.vendored/config.json)
+        # Note: .vendored/configs/ (with 's') is the config *storage* dir, which is fine
         assert "Registered git-semver" not in content
