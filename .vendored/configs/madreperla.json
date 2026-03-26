@@ -8,8 +8,12 @@
     ]
   },
   "provider": "pearls",
-  "description": "",
-  "docs": [],
+  "description": "git-semver: automated semantic versioning via GitHub workflows",
+  "docs": [
+    ".vendored/pkg/pearls/AGENTS.md",
+    "README.md",
+    "docs/"
+  ],
   "providers": {
     "issues": {
       "name": "pearls",
