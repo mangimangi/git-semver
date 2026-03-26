@@ -5,7 +5,8 @@
     "install_branch": "chore/install-madreperla",
     "protected": [
       ".vendored/pkg/madreperla/**"
-    ]
+    ],
+    "allowed": [".vendored/configs/madreperla.json"]
   },
   "provider": "pearls",
   "description": "git-semver: automated semantic versioning via GitHub workflows",
