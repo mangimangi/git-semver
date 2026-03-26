@@ -5,5 +5,11 @@
   "_comment_changelog": "Generate CHANGELOG.md on bump. Set false to disable, or use {\"file\": \"CHANGES.md\", \"ignore_prefixes\": [\"chore:\"]}",
   "_comment_files": "Optional: glob patterns for files whose changes trigger automatic patch bumps on merge. Example: \"files\": [\"src/**/*.py\", \"lib/**/*.js\"]",
   "_comment_updates": "Optional: files to update with new version on bump. \"file\" replaces entire file; [\"pattern\"] does find-and-replace. Example: \"updates\": {\"setup.py\": [\"version = \"]}",
-  "_comment_subdirs": "Optional: add subdirectory configs as top-level keys for monorepo support. Tags become <subdir>/vX.Y.Z. Example: \"frontend\": {\"version_file\": \"frontend/VERSION\", \"files\": [\"frontend/**/*.js\"]}"
+  "_comment_subdirs": "Optional: add subdirectory configs as top-level keys for monorepo support. Tags become <subdir>/vX.Y.Z. Example: \"frontend\": {\"version_file\": \"frontend/VERSION\", \"files\": [\"frontend/**/*.js\"]}",
+  "_vendor": {
+    "repo": "mangimangi/git-semver",
+    "install_branch": "chore/install-git-semver",
+    "protected": [".vendored/pkg/git-semver/**", ".github/workflows/version-bump.yml"],
+    "allowed": [".vendored/configs/git-semver.json"]
+  }
 }
