@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parent.parent
 INSTALL_SH = ROOT / "install.sh"
@@ -419,3 +420,60 @@ class TestV2NoSelfRegistration:
         # Should not modify the vendor registry (.vendored/config.json)
         # Note: .vendored/configs/ (with 's') is the config *storage* dir, which is fine
         assert "Registered git-semver" not in content
+
+
+class TestWorkflowTemplateConditions:
+    """Tests for the version-bump.yml two-job if conditions."""
+
+    @pytest.fixture(autouse=True)
+    def load_workflow(self):
+        self.wf = yaml.safe_load(TEMPLATE_VERSION_BUMP)
+
+    def test_has_bump_and_publish_jobs(self):
+        assert "bump" in self.wf["jobs"]
+        assert "publish" in self.wf["jobs"]
+
+    def test_bump_condition_allows_workflow_dispatch(self):
+        cond = self.wf["jobs"]["bump"]["if"]
+        assert "workflow_dispatch" in cond
+
+    def test_bump_condition_allows_non_bump_push(self):
+        cond = self.wf["jobs"]["bump"]["if"]
+        assert "github.event_name == 'push'" in cond
+        assert "chore: bump version" in cond
+        assert "!startsWith" in cond
+
+    def test_bump_condition_skips_install_commits(self):
+        cond = self.wf["jobs"]["bump"]["if"]
+        assert "chore: install" in cond
+
+    def test_publish_condition_requires_push(self):
+        cond = self.wf["jobs"]["publish"]["if"]
+        assert "github.event_name == 'push'" in cond
+
+    def test_publish_condition_requires_bump_commit(self):
+        cond = self.wf["jobs"]["publish"]["if"]
+        assert "startsWith(github.event.head_commit.message, 'chore: bump version')" in cond
+
+    def test_publish_excludes_dispatch(self):
+        """Publish should never run on dispatch."""
+        cond = self.wf["jobs"]["publish"]["if"]
+        assert "workflow_dispatch" not in cond
+
+    def test_bump_and_publish_are_mutually_exclusive(self):
+        """When publish triggers (bump commit push), bump must not trigger, and vice versa."""
+        bump_cond = self.wf["jobs"]["bump"]["if"]
+        publish_cond = self.wf["jobs"]["publish"]["if"]
+        # Bump excludes bump-version commits, publish requires them
+        assert "!startsWith(github.event.head_commit.message, 'chore: bump version')" in bump_cond
+        assert "startsWith(github.event.head_commit.message, 'chore: bump version')" in publish_cond
+
+    def test_bump_calls_semver_bump(self):
+        steps = self.wf["jobs"]["bump"]["steps"]
+        run_steps = [s for s in steps if "run" in s]
+        assert any("semver bump" in s["run"] for s in run_steps)
+
+    def test_publish_calls_semver_publish(self):
+        steps = self.wf["jobs"]["publish"]["steps"]
+        run_steps = [s for s in steps if "run" in s]
+        assert any("semver publish" in s["run"] for s in run_steps)
