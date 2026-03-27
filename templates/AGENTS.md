@@ -10,7 +10,7 @@ This project uses **git-semver** for automatic semantic versioning. Configuratio
 | Installed path | Edit? | Notes |
 |---------------|-------|-------|
 | `.semver/git-semver` | **NO** | Core script — update via install-vendored |
-| `.semver/bump-and-release` | **NO** | CI orchestration — update via install-vendored |
+| `.semver/semver` | **NO** | CI orchestration — update via install-vendored |
 | `.github/workflows/version-bump.yml` | **NO** | Installed workflow (thin shell) |
 | `.semver/config.json` | **YES** | Your versioning config |
 | `.semver/.version` | **NO** | Auto-managed version tracker |
