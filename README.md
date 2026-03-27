@@ -10,6 +10,7 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 - **Monorepo support** — subdirectory configs for independent versioning of multiple artifacts
 - **Automatic patch bumps** — on merge to main when configured files change
 - **Manual minor/major** — deliberate releases via `workflow_dispatch`
+- **Protected branch support** — auto-detects branch protection and falls back to PR mode
 - **Changelog generation** — from commit messages, with configurable noise filters
 - **No PAT required** — core versioning uses `GITHUB_TOKEN`
 - **CI-agnostic core** — the script works anywhere git and Python 3 are available
@@ -35,16 +36,18 @@ The `install-vendored.yml` workflow handles updates for all vendored tools (incl
 your-project/
 ├── .semver/
 │   ├── git-semver         # Core versioning script (don't edit)
-│   ├── bump-and-release   # CI orchestration script (don't edit)
+│   ├── semver             # CI orchestration script (don't edit)
 │   └── config.json        # Your config (edit this!)
 └── .github/
     └── workflows/
         └── version-bump.yml          # Auto-bump + release on merge
 ```
 
-When installed via the git-vendored v2 framework, code files (`git-semver`, `bump-and-release`) may live in `.vendored/pkg/git-semver/` instead of `.semver/`. Config always stays in `.semver/config.json`.
+When installed via the git-vendored v2 framework, code files (`git-semver`, `semver`) may live in `.vendored/pkg/git-semver/` instead of `.semver/`. Config always stays in `.semver/config.json`.
 
 The workflow is a thin shell — all logic lives in the scripts. Updates to versioning behavior are delivered via `install-vendored.yml` without modifying the workflow file.
+
+> **Protected branches work automatically.** If the main branch is protected, the bump job detects the push failure and falls back to creating a PR. No configuration needed — see [Protected Branch Support](#protected-branch-support) for details.
 
 ## Quick Start
 
@@ -80,6 +83,7 @@ git-semver version [--subdir <name>]                 # Print current version
 git-semver check [--since <commit>] [--subdir <name>] # Check if a bump is needed (exit 0=yes, 1=no)
 git-semver bump [patch|minor|major] [opts]            # Bump version, commit, tag, push
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
+git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
 ```
 
 All commands accept `--config <path>` to specify a non-default config file.
@@ -108,7 +112,7 @@ The complete version release operation:
 | Flag | Behavior |
 |------|----------|
 | (default) | update files, commit, tag, push |
-| `--no-push` | update files, commit, tag |
+| `--no-push` | update files, commit (no tag, no push) |
 | `--no-commit` | update files only |
 | `--subdir <name>` | Bump a specific subdirectory instead of root |
 | `--description "..."` | Override auto-collected changelog with a curated description |
@@ -120,8 +124,25 @@ Checks all configured components (root + subdirectories) for changed files and b
 | Flag | Behavior |
 |------|----------|
 | `--since <commit>` | Required — commit ref to diff against |
-| `--no-push` | Skip push |
+| `--no-push` | Commit only (no tag, no push) |
 | `--no-commit` | Update files only |
+
+### `git-semver tag [--push]`
+
+Creates version tags from VERSION files without modifying any files. Reads the current version from each component's `version_file` and creates annotated tags.
+
+- Root: `vX.Y.Z`
+- Subdirectories: `<subdir>/vX.Y.Z`
+- Always creates/updates the `latest` tag
+
+| Flag | Behavior |
+|------|----------|
+| (default) | Create tags locally only |
+| `--push` | Create tags and push (`git push --tags --force`) |
+| `--subdir <name>` | Tag a specific subdirectory instead of all components |
+| `--config <path>` | Specify a non-default config file |
+
+Idempotent: if a version tag already exists at HEAD, no error is raised.
 
 ### Local usage
 
@@ -140,6 +161,9 @@ Checks all configured components (root + subdirectories) for changed files and b
 
 # Check all components and bump triggered ones
 ./git-semver bump-all --since HEAD~5 --no-push
+
+# Create and push version tags (after bump --no-push)
+./git-semver tag --push
 ```
 
 ## Configuration
@@ -207,7 +231,7 @@ When enabled, collects commit messages since the last tag, filters out noise pre
 | Key | Default | Description |
 |-----|---------|-------------|
 | `on_merge` | `true` | Auto-trigger patch bump when `files` change on merge to main. When `false`, bumps are manual-only |
-| `automerge` | `true` | Version bump commits push directly to main. When `false`, creates a PR instead |
+| `automerge` | `true` | Attempt direct push first. When `false`, always create a PR. Note: protected branches are auto-detected — direct push falls back to PR automatically, so this setting is less relevant when branch protection is enabled |
 
 ### Subdirectory configs (monorepo support)
 
@@ -261,15 +285,47 @@ Each component is versioned and tagged independently. On merge, `bump-all` check
 
 ### version-bump.yml (Bump & Release)
 
-Combines version bump and GitHub Release creation in a single workflow. This avoids the GitHub Actions limitation where tag pushes made with `GITHUB_TOKEN` don't trigger other workflows.
+A two-job workflow that handles version bumping and GitHub Release creation. The two jobs are mutually exclusive, preventing loops.
 
-The workflow is a **thin shell** that passes GitHub context to `.semver/bump-and-release`. All orchestration logic (config reading, bump mode selection, PR creation, release creation) lives in the script, which is updated via the vendor install pipeline — no workflow modifications needed after initial install.
+The workflow is a **thin shell** that passes GitHub context to `.semver/semver`. All orchestration logic (config reading, bump mode selection, PR creation, release creation) lives in the script, which is updated via the vendor install pipeline — no workflow modifications needed after initial install.
 
-- **Push trigger**: on merge to main/master. Skips automated commits (`chore: bump version`, `chore: install`). Runs `git-semver bump-all` to check all components (root + subdirectories) and bump triggered ones. Respects `install.on_merge` config.
-- **Manual trigger**: `workflow_dispatch` with `bump_type`, optional `subdirectory`, and optional `changelog_description`. Bumps the specified component (root if subdirectory is empty).
+#### Bump job
+
+Runs when a non-bump commit lands on main (push) or on manual trigger (workflow_dispatch). Calls `semver bump`.
+
+- **Push trigger**: Skips `chore: bump version` and `chore: install` commits. Runs `git-semver bump-all --no-push` then attempts `git push`. If push fails due to branch protection, falls back to creating a PR.
+- **Manual trigger**: `workflow_dispatch` with `bump_type`, optional `subdirectory`, and optional `changelog_description`.
 - **Auto bumps are patches only.** Minor and major require manual dispatch.
-- **Direct push mode** (default): pushes directly to main, then creates GitHub Releases for each tag.
-- **PR mode**: when `automerge: false`, creates a branch and PR instead.
+- **Protected branches**: auto-detected. If `git push` fails with a protection error (`GH006`), the bump job creates a branch and PR instead. No configuration needed.
+- **PR mode**: when `automerge: false`, skips the push attempt and goes straight to PR.
+
+#### Publish job
+
+Runs when a `chore: bump version` commit lands on main (either direct push or merged PR). Calls `semver publish`.
+
+- Creates version tags via `git-semver tag --push`
+- Creates GitHub Releases for each version tag (skips `latest`)
+- Handles monorepo: creates releases for all component tags
+
+The bump and publish jobs never run together — their `if` conditions are mutually exclusive.
+
+### Protected Branch Support
+
+Protected branches work automatically with no configuration changes. The flow adapts based on whether `git push` succeeds:
+
+**Unprotected branch (default):**
+```
+push to main → bump job: bump + push → publish job: tag + release
+```
+
+**Protected branch (auto-detected):**
+```
+push to main → bump job: bump + PR → PR merged → publish job: tag + release
+```
+
+The bump job always uses `git-semver bump-all --no-push` (which creates the commit but no tags), then attempts `git push`. If push fails due to branch protection (`GH006` error), it creates a branch and PR with the bump commit. When the PR merges, the publish job detects the `chore: bump version` commit and creates tags + releases.
+
+Squash merges work correctly: GitHub uses the PR title as the squash commit message, which preserves the `chore: bump version` prefix that triggers the publish job.
 
 ### Authentication
 
@@ -317,7 +373,7 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | File | Type | Can Edit? |
 |------|------|-----------|
 | `.semver/git-semver` | Implementation | No — update via install-vendored |
-| `.semver/bump-and-release` | Implementation | No — update via install-vendored |
+| `.semver/semver` | Implementation | No — update via install-vendored |
 | `.semver/config.json` | Config | Yes — your versioning settings |
 | `.vendored/install` | Implementation | No — update via install-vendored |
 | `.vendored/check` | Implementation | No — update via install-vendored |
