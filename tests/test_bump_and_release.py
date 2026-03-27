@@ -562,6 +562,45 @@ class TestCmdPublish:
         assert len(gh_calls) == 1
         assert "v1.0.1" in gh_calls[0]
 
+    def test_publish_with_multiple_components(self, mock_run, env):
+        """Monorepo: creates releases for all component tags."""
+        calls, set_response = mock_run
+        env(GITHUB_REPOSITORY="owner/repo")
+        set_response(["git", "tag", "--points-at", "HEAD"],
+                     stdout="v1.0.1\nfrontend/v2.0.0\nlatest\n")
+
+        bar.cmd_publish()
+
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 2
+        tags_created = [c[3] for c in gh_calls]
+        assert "v1.0.1" in tags_created
+        assert "frontend/v2.0.0" in tags_created
+        assert "latest" not in tags_created
+
+    def test_publish_noop_when_no_tags(self, mock_run, env):
+        """No version tags created = no releases, exits cleanly."""
+        calls, set_response = mock_run
+        env(GITHUB_REPOSITORY="owner/repo")
+        set_response(["git", "tag", "--points-at", "HEAD"], stdout="\n")
+
+        bar.cmd_publish()  # Should not raise
+
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 0
+
+    def test_publish_skips_latest_tag(self, mock_run, env):
+        """Only version tags get releases, not 'latest'."""
+        calls, set_response = mock_run
+        env(GITHUB_REPOSITORY="owner/repo")
+        set_response(["git", "tag", "--points-at", "HEAD"],
+                     stdout="latest\n")
+
+        bar.cmd_publish()
+
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 0
+
 
 # ── main ──────────────────────────────────────────────────────────────────
 
