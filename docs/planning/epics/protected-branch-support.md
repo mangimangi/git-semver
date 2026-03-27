@@ -119,7 +119,7 @@ if result.returncode != 0:
 
 ### Edge cases
 
-- **Squash merges**: If the repo uses squash merges on bump PRs, the tag will point at the squash commit (different SHA from the PR branch commit). This is fine — `git-semver tag` creates tags at HEAD after merge.
+- **Squash merges**: Consumer repos use squash merges. The `release` job creates tags at HEAD (the squash commit on main), not the original branch commit. The `chore: bump version` prefix is preserved since GitHub uses the PR title as the squash commit message (e.g., `chore: bump version v0.0.18 (#42)`).
 - **Merge queue**: GitHub merge queues should work since the release job triggers on the final merge commit.
 - **Multiple queued bumps**: The existing concurrency group + `sync_branch()` logic handles this. The release job is idempotent (tag already exists = no-op or force update).
 - **Tag already exists**: `git tag -a` will fail if the tag exists. Need to handle this (skip or force). Since we use `-f` for `latest`, should be fine for that tag. For version tags, they should be unique.
