@@ -20,6 +20,7 @@ def make_args(**kwargs):
         "description": None,
         "no_push": False,
         "no_commit": False,
+        "push": False,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -157,7 +158,7 @@ class TestCmdBump:
         git_semver.cmd_bump(make_args(config=path, bump_type="major", no_commit=True))
         assert "2.0.0" in capsys.readouterr().out
 
-    def test_bump_with_commit_and_tag(self, make_config, make_version_file, mock_git, capsys):
+    def test_bump_no_push_commits_but_no_tags(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
             "files": [], "updates": {},
             "changelog": False,
@@ -167,14 +168,14 @@ class TestCmdBump:
         git_semver.cmd_bump(make_args(config=path, no_push=True))
         out = capsys.readouterr().out
         assert "Committed: chore: bump version to v1.0.1" in out
-        assert "Tagged: v1.0.1 + latest" in out
+        assert "no push" in out
         calls, _ = mock_git
-        # Verify git operations: add, commit, tag, tag -f
         git_cmds = [c[0] for c in calls]
+        # Should commit but NOT tag
         assert ("add", "-A") in git_cmds
         assert ("commit", "-m", "chore: bump version to v1.0.1") in git_cmds
-        assert ("tag", "-a", "v1.0.1", "-m", "v1.0.1") in git_cmds
-        assert ("tag", "-f", "latest") in git_cmds
+        assert ("tag", "-a", "v1.0.1", "-m", "v1.0.1") not in git_cmds
+        assert ("tag", "-f", "latest") not in git_cmds
 
     def test_bump_with_push(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
@@ -186,9 +187,12 @@ class TestCmdBump:
         git_semver.cmd_bump(make_args(config=path))
         out = capsys.readouterr().out
         assert "pushed" in out
+        assert "Tagged: v1.0.1 + latest" in out
         calls, _ = mock_git
         git_cmds = [c[0] for c in calls]
         assert ("push",) in git_cmds
+        assert ("tag", "-a", "v1.0.1", "-m", "v1.0.1") in git_cmds
+        assert ("tag", "-f", "latest") in git_cmds
 
     def test_bump_subdir(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
@@ -207,6 +211,7 @@ class TestCmdBump:
         assert "2.0.1" in out
 
     def test_bump_subdir_tag_format(self, make_config, make_version_file, mock_git, capsys):
+        """Full push path: commit + tag + push for subdir."""
         path = make_config({
             "frontend": {
                 "version_file": "frontend/VERSION",
@@ -216,7 +221,7 @@ class TestCmdBump:
         })
         make_version_file("1.0.0", path="frontend/VERSION")
 
-        git_semver.cmd_bump(make_args(config=path, subdir="frontend", no_push=True))
+        git_semver.cmd_bump(make_args(config=path, subdir="frontend"))
         calls, _ = mock_git
         git_cmds = [c[0] for c in calls]
         assert ("tag", "-a", "frontend/v1.0.1", "-m", "frontend/v1.0.1") in git_cmds
@@ -354,6 +359,9 @@ class TestCmdBumpAll:
         git_semver.cmd_bump_all(make_args(config=path, since="abc", no_push=True))
         out = capsys.readouterr().out
         assert "no push" in out
+        # No tags created when --no-push
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-f", "latest") not in git_cmds
 
     def test_bump_all_with_push(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
@@ -508,6 +516,126 @@ class TestBumpComponent:
         assert "using as baseline" not in out
 
 
+# ── cmd_tag ─────────────────────────────────────────────────────────────────
+
+class TestCmdTag:
+    def test_tags_root_version(self, make_config, make_version_file, mock_git, capsys):
+        path = make_config({
+            "files": [], "updates": {},
+            "changelog": False,
+        })
+        make_version_file("1.2.3")
+
+        git_semver.cmd_tag(make_args(config=path))
+        out = capsys.readouterr().out
+        assert "Tagged root: v1.2.3" in out
+        calls, _ = mock_git
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-a", "v1.2.3", "-m", "v1.2.3") in git_cmds
+        assert ("tag", "-f", "latest") in git_cmds
+
+    def test_tags_subdir(self, make_config, make_version_file, mock_git, capsys):
+        path = make_config({
+            "frontend": {
+                "version_file": "frontend/VERSION",
+                "files": [], "updates": {},
+            },
+            "changelog": False,
+        })
+        make_version_file("2.0.0", path="frontend/VERSION")
+
+        git_semver.cmd_tag(make_args(config=path, subdir="frontend"))
+        out = capsys.readouterr().out
+        assert "Tagged frontend: frontend/v2.0.0" in out
+        calls, _ = mock_git
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-a", "frontend/v2.0.0", "-m", "frontend/v2.0.0") in git_cmds
+
+    def test_tags_all_components(self, make_config, make_version_file, mock_git, capsys):
+        path = make_config({
+            "version_file": "VERSION",
+            "files": [],
+            "updates": {},
+            "frontend": {
+                "version_file": "frontend/VERSION",
+                "files": [], "updates": {},
+            },
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+        make_version_file("2.0.0", path="frontend/VERSION")
+
+        git_semver.cmd_tag(make_args(config=path))
+        out = capsys.readouterr().out
+        assert "v1.0.0" in out
+        assert "frontend/v2.0.0" in out
+        calls, _ = mock_git
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-a", "v1.0.0", "-m", "v1.0.0") in git_cmds
+        assert ("tag", "-a", "frontend/v2.0.0", "-m", "frontend/v2.0.0") in git_cmds
+
+    def test_tag_push(self, make_config, make_version_file, mock_git, capsys):
+        path = make_config({
+            "files": [], "updates": {},
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+
+        git_semver.cmd_tag(make_args(config=path, push=True))
+        out = capsys.readouterr().out
+        assert "Tags pushed" in out
+        calls, _ = mock_git
+        git_cmds = [c[0] for c in calls]
+        assert ("push", "--tags", "--force") in git_cmds
+
+    def test_tag_no_push_by_default(self, make_config, make_version_file, mock_git, capsys):
+        path = make_config({
+            "files": [], "updates": {},
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+
+        git_semver.cmd_tag(make_args(config=path))
+        calls, _ = mock_git
+        git_cmds = [c[0] for c in calls]
+        assert ("push", "--tags", "--force") not in git_cmds
+
+    def test_tag_idempotent_at_head(self, make_config, make_version_file, mock_git, capsys):
+        """No error when tag already exists at HEAD."""
+        path = make_config({
+            "files": [], "updates": {},
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+        calls, mock = mock_git
+
+        head_sha = "abc123"
+
+        def side_effect(*args, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            if args[0] == "tag" and args[1] == "-l":
+                r.stdout = "v1.0.0"
+                return r
+            if args[0] == "rev-list":
+                r.stdout = head_sha
+                return r
+            if args[0] == "rev-parse":
+                r.stdout = head_sha
+                return r
+            r.stdout = ""
+            return r
+
+        mock.side_effect = side_effect
+
+        git_semver.cmd_tag(make_args(config=path))
+        out = capsys.readouterr().out
+        assert "already exists at HEAD" in out
+        # Tag should NOT be re-created (no tag -a call)
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-a", "v1.0.0", "-m", "v1.0.0") not in git_cmds
+
+
 # ── CLI / main ──────────────────────────────────────────────────────────────
 
 class TestMain:
@@ -557,6 +685,14 @@ class TestMain:
         assert args.command == "bump-all"
         assert args.since == "abc"
         assert args.bump_type == "major"
+
+        args = parser.parse_args(["tag", "--push"])
+        assert args.command == "tag"
+        assert args.push is True
+
+        args = parser.parse_args(["tag", "--subdir", "frontend"])
+        assert args.command == "tag"
+        assert args.subdir == "frontend"
 
     def test_build_parser_subdir_flag(self):
         parser = git_semver.build_parser()
