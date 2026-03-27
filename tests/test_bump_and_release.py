@@ -1,8 +1,9 @@
-"""Tests for the bump-and-release CI orchestration script."""
+"""Tests for the semver CI orchestration script."""
 
 import json
+import sys
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch as mock_patch
 
 import pytest
 
@@ -11,17 +12,17 @@ import semver_script as bar
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
-def _make_result(stdout="", returncode=0):
+def _make_result(stdout="", stderr="", returncode=0):
     r = MagicMock()
     r.stdout = stdout
-    r.stderr = ""
+    r.stderr = stderr
     r.returncode = returncode
     return r
 
 
 @pytest.fixture
 def mock_run(monkeypatch):
-    """Replace bump_and_release.run with a recorder.
+    """Replace semver_script.run with a recorder.
 
     Returns (calls, set_response).
       calls:        list of command tuples captured
@@ -38,8 +39,8 @@ def mock_run(monkeypatch):
                 return responses[key]
         return _make_result()
 
-    def set_response(cmd_prefix, stdout="", returncode=0):
-        responses[tuple(cmd_prefix)] = _make_result(stdout, returncode)
+    def set_response(cmd_prefix, stdout="", stderr="", returncode=0):
+        responses[tuple(cmd_prefix)] = _make_result(stdout, stderr, returncode)
 
     monkeypatch.setattr(bar, "run", _run)
     return calls, set_response
@@ -51,7 +52,7 @@ def env(monkeypatch):
     cleared = [
         "GITHUB_EVENT_NAME", "GITHUB_EVENT_BEFORE", "GITHUB_SHA",
         "INPUT_BUMP_TYPE", "INPUT_SUBDIRECTORY", "INPUT_CHANGELOG_DESCRIPTION",
-        "GH_TOKEN", "GITHUB_REPOSITORY",
+        "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF",
     ]
     for key in cleared:
         monkeypatch.delenv(key, raising=False)
@@ -140,52 +141,134 @@ class TestSyncBranch:
         assert "could not fast-forward" in out
 
 
-# ── handle_push ─────────────────────────────────────────────────────────────
+# ── is_protected_branch_error ──────────────────────────────────────────────
 
-class TestHandlePush:
-    def test_automerge_calls_bump_all_and_releases(self, mock_run, env):
+class TestIsProtectedBranchError:
+    def test_gh006_detected(self):
+        result = _make_result(stderr="remote: error: GH006: Protected branch")
+        assert bar.is_protected_branch_error(result) is True
+
+    def test_protected_branch_text_detected(self):
+        result = _make_result(stderr="refusing to push to protected branch")
+        assert bar.is_protected_branch_error(result) is True
+
+    def test_other_error_not_detected(self):
+        result = _make_result(stderr="fatal: remote rejected")
+        assert bar.is_protected_branch_error(result) is False
+
+    def test_empty_stderr(self):
+        result = _make_result(stderr="")
+        assert bar.is_protected_branch_error(result) is False
+
+
+# ── try_push_or_pr ─────────────────────────────────────────────────────────
+
+class TestTryPushOrPr:
+    def test_successful_push(self, mock_run, env):
+        calls, set_response = mock_run
+        set_response(["git", "push"], stdout="", returncode=0)
+
+        result = bar.try_push_or_pr("chore: bump version v1.0.1")
+        assert result is True
+
+        # No PR created
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 0
+
+    def test_protected_branch_falls_back_to_pr(self, mock_run, env):
+        calls, set_response = mock_run
+        set_response(["git", "push"],
+                     stderr="remote: error: GH006: Protected branch",
+                     returncode=1)
+
+        result = bar.try_push_or_pr("chore: bump version v1.0.1")
+        assert result is False
+
+        # PR created
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 1
+        assert gh_calls[0][:3] == ("gh", "pr", "create")
+
+    def test_non_protection_error_exits(self, mock_run, env):
+        calls, set_response = mock_run
+        set_response(["git", "push"],
+                     stderr="fatal: network error",
+                     returncode=1)
+
+        with pytest.raises(SystemExit):
+            bar.try_push_or_pr("chore: bump version v1.0.1")
+
+
+# ── handle_push_bump ──────────────────────────────────────────────────────
+
+class TestHandlePushBump:
+    def test_automerge_bumps_and_pushes(self, mock_run, env):
         calls, set_response = mock_run
         env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REPOSITORY="owner/repo",
             GITHUB_REF="refs/heads/main")
-        set_response(["git", "tag", "--points-at", "HEAD"],
-                     stdout="v1.0.1\nlatest\n")
 
-        bar.handle_push(automerge=True)
+        # rev-parse returns different SHAs (bump happened)
+        rev_parse_results = iter(["pre_sha\n", "new_sha\n"])
 
-        # Should call: configure_git (2), sync_branch (1), semver bump-all (1),
-        # git tag (1), gh release create (1)
-        cmds = [c[0] for c in calls]
-        assert "git" in cmds         # git config calls
-        assert bar.SEMVER_SCRIPT in cmds  # semver call
+        original_calls = calls
 
-        # Check sync_branch was called (git pull --ff-only)
-        pull_calls = [c for c in calls if c[:3] == ("git", "pull", "--ff-only")]
-        assert len(pull_calls) == 1
+        def _run(*cmd, check=True, capture=True):
+            original_calls.append(cmd)
+            if cmd[:2] == ("git", "rev-parse") and cmd[2:] == ("HEAD",):
+                return _make_result(stdout=next(rev_parse_results))
+            if cmd[:2] == ("git", "log"):
+                return _make_result(stdout="chore: bump version v1.0.1\n")
+            if cmd[:2] == ("git", "push") and len(cmd) == 2:
+                return _make_result(returncode=0)
+            return _make_result()
 
-        # Check semver was called with bump-all --since
-        semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
+        with mock_patch.object(bar, "run", _run):
+            bar.handle_push_bump(automerge=True)
+
+        # Check git-semver was called with --no-push
+        semver_calls = [c for c in original_calls if c[0] == bar.SEMVER_SCRIPT]
         assert len(semver_calls) == 1
-        assert semver_calls[0] == (bar.SEMVER_SCRIPT, "bump-all", "--since", "abc123")
+        assert "--no-push" in semver_calls[0]
+        assert "--since" in semver_calls[0]
 
-        # Check release was created (not for 'latest')
-        gh_calls = [c for c in calls if c[0] == "gh"]
+        # Check git push was attempted (automerge=True)
+        push_calls = [c for c in original_calls
+                      if c[:2] == ("git", "push") and len(c) == 2]
+        assert len(push_calls) == 1
+
+    def test_automerge_protected_branch_falls_back_to_pr(self, mock_run, env):
+        calls, set_response = mock_run
+        env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REF="refs/heads/main")
+
+        rev_parse_results = iter(["pre_sha\n", "new_sha\n"])
+        original_calls = calls
+
+        def _run(*cmd, check=True, capture=True):
+            original_calls.append(cmd)
+            if cmd[:2] == ("git", "rev-parse") and cmd[2:] == ("HEAD",):
+                return _make_result(stdout=next(rev_parse_results))
+            if cmd[:2] == ("git", "log"):
+                return _make_result(stdout="chore: bump version v1.0.1\n")
+            if cmd[:2] == ("git", "push") and len(cmd) == 2:
+                return _make_result(
+                    stderr="remote: error: GH006: Protected branch",
+                    returncode=1)
+            return _make_result()
+
+        with mock_patch.object(bar, "run", _run):
+            bar.handle_push_bump(automerge=True)
+
+        # PR created after protected branch rejection
+        gh_calls = [c for c in original_calls if c[0] == "gh"]
         assert len(gh_calls) == 1
-        assert gh_calls[0][:3] == ("gh", "release", "create")
-        assert "v1.0.1" in gh_calls[0]
+        assert gh_calls[0][:3] == ("gh", "pr", "create")
 
     def test_pr_mode_creates_pr_when_changes(self, mock_run, env):
         calls, set_response = mock_run
-        env(
-            GITHUB_EVENT_BEFORE="abc123",
-            GITHUB_REF="refs/heads/main",
-        )
+        env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REF="refs/heads/main")
 
-        # rev-parse HEAD: first call returns pre_bump sha, second returns new sha
         rev_parse_results = iter(["pre_sha\n", "new_sha\n"])
-
-        # Replace the mock_run's _run to handle multiple rev-parse calls
         original_calls = calls
-        responses = {}
 
         def _run(*cmd, check=True, capture=True):
             original_calls.append(cmd)
@@ -195,31 +278,30 @@ class TestHandlePush:
                 return _make_result(stdout="chore: bump version v1.0.1\n")
             return _make_result()
 
-        import semver_script as bar_mod
-        from unittest.mock import patch as mock_patch
-        with mock_patch.object(bar_mod, "run", _run):
-            bar.handle_push(automerge=False)
+        with mock_patch.object(bar, "run", _run):
+            bar.handle_push_bump(automerge=False)
 
-        # Check semver was called with --no-push
+        # Check --no-push used
         semver_calls = [c for c in original_calls if c[0] == bar.SEMVER_SCRIPT]
-        assert len(semver_calls) == 1
         assert "--no-push" in semver_calls[0]
 
-        # Check PR was created
+        # PR created (no push attempt with automerge=False)
         gh_calls = [c for c in original_calls if c[0] == "gh"]
         assert len(gh_calls) == 1
         assert gh_calls[0][:3] == ("gh", "pr", "create")
 
+        # No git push attempted
+        push_calls = [c for c in original_calls
+                      if c[:2] == ("git", "push") and len(c) == 2]
+        assert len(push_calls) == 0
+
     def test_pr_mode_skips_pr_when_no_changes(self, mock_run, env):
         calls, set_response = mock_run
-        env(
-            GITHUB_EVENT_BEFORE="abc123",
-            GITHUB_REF="refs/heads/main",
-        )
-        # HEAD unchanged after bump-all (both rev-parse calls return same sha)
+        env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REF="refs/heads/main")
+        # HEAD unchanged (no bump)
         set_response(["git", "rev-parse", "HEAD"], stdout="same_sha\n")
 
-        bar.handle_push(automerge=False)
+        bar.handle_push_bump(automerge=False)
 
         # No PR created
         gh_calls = [c for c in calls if c[0] == "gh"]
@@ -228,16 +310,17 @@ class TestHandlePush:
     def test_errors_when_before_not_set(self, mock_run, env):
         env()  # no GITHUB_EVENT_BEFORE
         with pytest.raises(SystemExit):
-            bar.handle_push(automerge=True)
+            bar.handle_push_bump(automerge=True)
 
     def test_sync_branch_called_before_bump(self, mock_run, env):
-        """Verify sync_branch runs before semver bump-all."""
+        """Verify sync_branch runs before git-semver bump-all."""
         calls, set_response = mock_run
         env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REPOSITORY="owner/repo",
             GITHUB_REF="refs/heads/main")
-        set_response(["git", "tag", "--points-at", "HEAD"], stdout="")
+        # Same SHA = no bump, simplifies test
+        set_response(["git", "rev-parse", "HEAD"], stdout="same\n")
 
-        bar.handle_push(automerge=True)
+        bar.handle_push_bump(automerge=True)
 
         # Find indices of pull and semver calls
         pull_idx = next(i for i, c in enumerate(calls)
@@ -247,23 +330,28 @@ class TestHandlePush:
         assert pull_idx < semver_idx
 
 
-# ── handle_dispatch ─────────────────────────────────────────────────────────
+# ── handle_dispatch_bump ──────────────────────────────────────────────────
 
-class TestHandleDispatch:
+class TestHandleDispatchBump:
     def test_automerge_with_bump_type(self, mock_run, env):
         calls, set_response = mock_run
         env(INPUT_BUMP_TYPE="minor", GITHUB_REPOSITORY="owner/repo")
-        set_response(["git", "tag", "--points-at", "HEAD"], stdout="v1.1.0\n")
+        set_response(["git", "log", "-1", "--pretty=%s"],
+                     stdout="chore: bump version to v1.1.0\n")
+        set_response(["git", "push"], returncode=0)
 
-        bar.handle_dispatch(automerge=True)
+        bar.handle_dispatch_bump(automerge=True)
 
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
         assert len(semver_calls) == 1
-        assert semver_calls[0] == (bar.SEMVER_SCRIPT, "bump", "minor")
+        # Always uses --no-push
+        assert "--no-push" in semver_calls[0]
+        assert "minor" in semver_calls[0]
 
-        # Release created
-        gh_calls = [c for c in calls if c[0] == "gh"]
-        assert len(gh_calls) == 1
+        # Push attempted
+        push_calls = [c for c in calls
+                      if c[:2] == ("git", "push") and len(c) == 2]
+        assert len(push_calls) == 1
 
     def test_automerge_with_subdir_and_description(self, mock_run, env):
         calls, set_response = mock_run
@@ -273,17 +361,18 @@ class TestHandleDispatch:
             INPUT_CHANGELOG_DESCRIPTION="Breaking change",
             GITHUB_REPOSITORY="owner/repo",
         )
-        set_response(["git", "tag", "--points-at", "HEAD"],
-                     stdout="frontend/v2.0.0\n")
+        set_response(["git", "log", "-1", "--pretty=%s"],
+                     stdout="chore: bump version to frontend/v2.0.0\n")
+        set_response(["git", "push"], returncode=0)
 
-        bar.handle_dispatch(automerge=True)
+        bar.handle_dispatch_bump(automerge=True)
 
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
-        assert semver_calls[0] == (
-            bar.SEMVER_SCRIPT, "bump", "major",
+        assert (
+            bar.SEMVER_SCRIPT, "bump", "major", "--no-push",
             "--subdir", "frontend",
             "--description", "Breaking change",
-        )
+        ) == semver_calls[0]
 
     def test_pr_mode_creates_pr(self, mock_run, env):
         calls, set_response = mock_run
@@ -291,20 +380,24 @@ class TestHandleDispatch:
         set_response(["git", "describe", "--tags", "--exact-match", "HEAD"],
                      stdout="v1.0.2\n")
 
-        bar.handle_dispatch(automerge=False)
+        bar.handle_dispatch_bump(automerge=False)
 
         # bump called with --no-push
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
         assert "--no-push" in semver_calls[0]
 
-        # PR created
+        # PR created (no push attempt)
         gh_calls = [c for c in calls if c[0] == "gh"]
         assert len(gh_calls) == 1
         pr_call = gh_calls[0]
         assert "--title" in pr_call
-        # Find the title value
         title_idx = list(pr_call).index("--title") + 1
         assert "v1.0.2" in pr_call[title_idx]
+
+        # No git push attempted
+        push_calls = [c for c in calls
+                      if c[:2] == ("git", "push") and len(c) == 2]
+        assert len(push_calls) == 0
 
     def test_pr_mode_handles_unknown_tag(self, mock_run, env):
         calls, set_response = mock_run
@@ -312,7 +405,7 @@ class TestHandleDispatch:
         set_response(["git", "describe", "--tags", "--exact-match", "HEAD"],
                      stdout="", returncode=128)
 
-        bar.handle_dispatch(automerge=False)
+        bar.handle_dispatch_bump(automerge=False)
 
         # Branch uses "unknown" fallback
         checkout_calls = [c for c in calls
@@ -322,12 +415,31 @@ class TestHandleDispatch:
     def test_defaults_bump_type_to_patch(self, mock_run, env):
         calls, set_response = mock_run
         env(GITHUB_REPOSITORY="owner/repo")
-        set_response(["git", "tag", "--points-at", "HEAD"], stdout="")
+        set_response(["git", "log", "-1", "--pretty=%s"],
+                     stdout="chore: bump version to v1.0.1\n")
+        set_response(["git", "push"], returncode=0)
 
-        bar.handle_dispatch(automerge=True)
+        bar.handle_dispatch_bump(automerge=True)
 
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
-        assert semver_calls[0] == (bar.SEMVER_SCRIPT, "bump", "patch")
+        assert "patch" in semver_calls[0]
+
+    def test_dispatch_protected_branch_falls_back(self, mock_run, env):
+        """Dispatch with automerge=True falls back to PR on protected branch."""
+        calls, set_response = mock_run
+        env(INPUT_BUMP_TYPE="patch")
+        set_response(["git", "log", "-1", "--pretty=%s"],
+                     stdout="chore: bump version to v1.0.1\n")
+        set_response(["git", "push"],
+                     stderr="remote: error: GH006: Protected branch",
+                     returncode=1)
+
+        bar.handle_dispatch_bump(automerge=True)
+
+        # PR created
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 1
+        assert gh_calls[0][:3] == ("gh", "pr", "create")
 
 
 # ── create_releases ─────────────────────────────────────────────────────────
@@ -359,11 +471,11 @@ class TestCreateReleases:
         assert len(gh_calls) == 0
 
 
-# ── semver helper ──────────────────────────────────────────────────────────
+# ── git_semver helper ──────────────────────────────────────────────────────
 
-class TestSemver:
+class TestGitSemver:
     def test_passes_capture_false_to_run(self, monkeypatch):
-        """semver() must pass capture=False so git-semver output is visible in CI."""
+        """git_semver() must pass capture=False so git-semver output is visible in CI."""
         captured_kwargs = {}
 
         def _run(*cmd, check=True, capture=True):
@@ -371,30 +483,29 @@ class TestSemver:
             return _make_result()
 
         monkeypatch.setattr(bar, "run", _run)
-        bar.semver("bump-all", "--since", "abc123")
+        bar.git_semver("bump-all", "--since", "abc123")
         assert captured_kwargs["capture"] is False
 
 
-# ── main ────────────────────────────────────────────────────────────────────
+# ── cmd_bump ──────────────────────────────────────────────────────────────
 
-class TestMain:
-    def test_push_dispatches_to_handle_push(self, monkeypatch, env, tmp_path):
+class TestCmdBump:
+    def test_push_dispatches_to_handle_push_bump(self, monkeypatch, env, tmp_path):
         env(GITHUB_EVENT_NAME="push", GITHUB_EVENT_BEFORE="abc")
-        # Config with automerge=true
         cfg = tmp_path / "config.json"
         cfg.write_text(json.dumps({}))
         monkeypatch.setattr(bar, "CONFIG_PATH", str(cfg))
 
         called_with = {}
 
-        def fake_handle_push(automerge):
+        def fake_handle_push_bump(automerge):
             called_with["automerge"] = automerge
 
-        monkeypatch.setattr(bar, "handle_push", fake_handle_push)
-        bar.main()
+        monkeypatch.setattr(bar, "handle_push_bump", fake_handle_push_bump)
+        bar.cmd_bump()
         assert called_with["automerge"] is True
 
-    def test_dispatch_dispatches_to_handle_dispatch(self, monkeypatch, env, tmp_path):
+    def test_dispatch_dispatches_to_handle_dispatch_bump(self, monkeypatch, env, tmp_path):
         env(GITHUB_EVENT_NAME="workflow_dispatch")
         cfg = tmp_path / "config.json"
         cfg.write_text(json.dumps({"install": {"automerge": False}}))
@@ -402,11 +513,11 @@ class TestMain:
 
         called_with = {}
 
-        def fake_handle_dispatch(automerge):
+        def fake_handle_dispatch_bump(automerge):
             called_with["automerge"] = automerge
 
-        monkeypatch.setattr(bar, "handle_dispatch", fake_handle_dispatch)
-        bar.main()
+        monkeypatch.setattr(bar, "handle_dispatch_bump", fake_handle_dispatch_bump)
+        bar.cmd_bump()
         assert called_with["automerge"] is False
 
     def test_push_skips_when_on_merge_false(self, monkeypatch, env, tmp_path, capsys):
@@ -415,7 +526,7 @@ class TestMain:
         cfg.write_text(json.dumps({"install": {"on_merge": False}}))
         monkeypatch.setattr(bar, "CONFIG_PATH", str(cfg))
 
-        bar.main()
+        bar.cmd_bump()
 
         out = capsys.readouterr().out
         assert "on_merge is false" in out
@@ -427,4 +538,61 @@ class TestMain:
         monkeypatch.setattr(bar, "CONFIG_PATH", str(cfg))
 
         with pytest.raises(SystemExit):
+            bar.cmd_bump()
+
+
+# ── cmd_publish ───────────────────────────────────────────────────────────
+
+class TestCmdPublish:
+    def test_calls_tag_push_and_releases(self, mock_run, env):
+        calls, set_response = mock_run
+        env(GITHUB_REPOSITORY="owner/repo")
+        set_response(["git", "tag", "--points-at", "HEAD"],
+                     stdout="v1.0.1\nlatest\n")
+
+        bar.cmd_publish()
+
+        # git-semver tag --push called
+        semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
+        assert len(semver_calls) == 1
+        assert semver_calls[0] == (bar.SEMVER_SCRIPT, "tag", "--push")
+
+        # Release created (not for latest)
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 1
+        assert "v1.0.1" in gh_calls[0]
+
+
+# ── main ──────────────────────────────────────────────────────────────────
+
+class TestMain:
+    def test_no_subcommand_exits(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["semver"])
+        with pytest.raises(SystemExit):
             bar.main()
+
+    def test_unknown_subcommand_exits(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["semver", "unknown"])
+        with pytest.raises(SystemExit):
+            bar.main()
+
+    def test_bump_subcommand(self, monkeypatch, env, tmp_path):
+        monkeypatch.setattr(sys, "argv", ["semver", "bump"])
+        env(GITHUB_EVENT_NAME="push")
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"install": {"on_merge": False}}))
+        monkeypatch.setattr(bar, "CONFIG_PATH", str(cfg))
+
+        bar.main()  # Should not raise (on_merge=false skips)
+
+    def test_publish_subcommand(self, monkeypatch, mock_run, env):
+        monkeypatch.setattr(sys, "argv", ["semver", "publish"])
+        calls, set_response = mock_run
+        env(GITHUB_REPOSITORY="owner/repo")
+        set_response(["git", "tag", "--points-at", "HEAD"], stdout="\n")
+
+        bar.main()
+
+        # git-semver tag --push called
+        semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
+        assert len(semver_calls) == 1
