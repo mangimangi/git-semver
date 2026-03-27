@@ -13,7 +13,7 @@ INSTALL_SH = ROOT / "install.sh"
 TEMPLATE_VERSION_BUMP = (ROOT / "templates" / "github" / "workflows" / "version-bump.yml").read_text()
 TEMPLATE_CONFIG = (ROOT / "templates" / "semver" / "config.json").read_text()
 CORE_SCRIPT = (ROOT / "git-semver").read_text()
-BUMP_AND_RELEASE = (ROOT / "bump-and-release").read_text()
+SEMVER_SCRIPT = (ROOT / "semver").read_text()
 
 
 def _stub_install_sh(tmp_path: Path) -> Path:
@@ -27,7 +27,7 @@ def _stub_install_sh(tmp_path: Path) -> Path:
 
     # Populate the local repo mirror with template files
     (repo_dir / "git-semver").write_text(CORE_SCRIPT)
-    (repo_dir / "bump-and-release").write_text(BUMP_AND_RELEASE)
+    (repo_dir / "semver").write_text(SEMVER_SCRIPT)
     templates = repo_dir / "templates"
     (templates / "github" / "workflows").mkdir(parents=True)
     (templates / "github" / "workflows" / "version-bump.yml").write_text(TEMPLATE_VERSION_BUMP)
@@ -84,7 +84,7 @@ class TestInstallFreshProject:
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (project / ".semver" / "git-semver").exists()
-        assert (project / ".semver" / "bump-and-release").exists()
+        assert (project / ".semver" / "semver").exists()
         assert (project / ".vendored" / "configs" / "git-semver.json").exists()
         # .version file should NOT be created (v2 contract)
         assert not (project / ".semver" / ".version").exists()
@@ -97,8 +97,8 @@ class TestInstallFreshProject:
         mode = (project / ".semver" / "git-semver").stat().st_mode
         assert mode & 0o111, "git-semver should be executable"
 
-        mode = (project / ".semver" / "bump-and-release").stat().st_mode
-        assert mode & 0o111, "bump-and-release should be executable"
+        mode = (project / ".semver" / "semver").stat().st_mode
+        assert mode & 0o111, "semver should be executable"
 
     def test_installs_workflow_templates(self, tmp_path):
         script = _stub_install_sh(tmp_path)
@@ -257,7 +257,7 @@ class TestV2EnvVars:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         # Code files go to custom dir
         assert (project / custom_dir / "git-semver").exists()
-        assert (project / custom_dir / "bump-and-release").exists()
+        assert (project / custom_dir / "semver").exists()
         # Config goes to .vendored/configs/
         assert (project / ".vendored" / "configs" / "git-semver.json").exists()
 
@@ -306,7 +306,7 @@ class TestV2Manifest:
         lines = manifest_path.read_text().strip().split("\n")
         # Should include code files and workflow (fresh install)
         assert ".semver/git-semver" in lines
-        assert ".semver/bump-and-release" in lines
+        assert ".semver/semver" in lines
         assert ".github/workflows/version-bump.yml" in lines
 
     def test_manifest_not_written_when_env_var_unset(self, tmp_path):
@@ -357,7 +357,7 @@ class TestV2Manifest:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         lines = manifest_path.read_text().strip().split("\n")
         assert f"{custom_dir}/git-semver" in lines
-        assert f"{custom_dir}/bump-and-release" in lines
+        assert f"{custom_dir}/semver" in lines
 
     def test_manifest_excludes_existing_workflow(self, tmp_path):
         """Workflow not in manifest when it already existed (wasn't installed)."""

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bump_and_release as bar
+import semver_script as bar
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ class TestHandlePush:
                 return _make_result(stdout="chore: bump version v1.0.1\n")
             return _make_result()
 
-        import bump_and_release as bar_mod
+        import semver_script as bar_mod
         from unittest.mock import patch as mock_patch
         with mock_patch.object(bar_mod, "run", _run):
             bar.handle_push(automerge=False)
