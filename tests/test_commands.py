@@ -635,6 +635,35 @@ class TestCmdTag:
         git_cmds = [c[0] for c in calls]
         assert ("tag", "-a", "v1.0.0", "-m", "v1.0.0") not in git_cmds
 
+    def test_tag_errors_when_exists_at_different_commit(self, make_config, make_version_file, mock_git):
+        """Clear error when tag exists at a different commit than HEAD."""
+        path = make_config({
+            "files": [], "updates": {},
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+        calls, mock = mock_git
+
+        def side_effect(*args, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            if args[0] == "tag" and args[1] == "-l":
+                r.stdout = "v1.0.0"
+                return r
+            if args[0] == "rev-list":
+                r.stdout = "oldcommit1234"
+                return r
+            if args[0] == "rev-parse":
+                r.stdout = "newcommit5678"
+                return r
+            r.stdout = ""
+            return r
+
+        mock.side_effect = side_effect
+
+        with pytest.raises(git_semver.SemverError, match="already exists at commit"):
+            git_semver.cmd_tag(make_args(config=path))
+
 
 # ── CLI / main ──────────────────────────────────────────────────────────────
 
