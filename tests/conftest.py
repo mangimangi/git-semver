@@ -27,7 +27,7 @@ def _import_extensionless(name, filename):
 
 
 _import_extensionless("git_semver", "git-semver")
-_import_extensionless("semver_script", "semver")
+_import_extensionless("semver_script", "release")
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────

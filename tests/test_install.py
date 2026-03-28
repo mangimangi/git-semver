@@ -14,7 +14,7 @@ INSTALL_SH = ROOT / "install.sh"
 TEMPLATE_VERSION_BUMP = (ROOT / "templates" / "github" / "workflows" / "version-bump.yml").read_text()
 TEMPLATE_CONFIG = (ROOT / "templates" / "semver" / "config.json").read_text()
 CORE_SCRIPT = (ROOT / "git-semver").read_text()
-SEMVER_SCRIPT = (ROOT / "semver").read_text()
+RELEASE_SCRIPT = (ROOT / "release").read_text()
 
 
 def _stub_install_sh(tmp_path: Path) -> Path:
@@ -28,7 +28,7 @@ def _stub_install_sh(tmp_path: Path) -> Path:
 
     # Populate the local repo mirror with template files
     (repo_dir / "git-semver").write_text(CORE_SCRIPT)
-    (repo_dir / "semver").write_text(SEMVER_SCRIPT)
+    (repo_dir / "release").write_text(RELEASE_SCRIPT)
     templates = repo_dir / "templates"
     (templates / "github" / "workflows").mkdir(parents=True)
     (templates / "github" / "workflows" / "version-bump.yml").write_text(TEMPLATE_VERSION_BUMP)
@@ -85,7 +85,7 @@ class TestInstallFreshProject:
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (project / ".semver" / "git-semver").exists()
-        assert (project / ".semver" / "semver").exists()
+        assert (project / ".semver" / "release").exists()
         assert (project / ".vendored" / "configs" / "git-semver.json").exists()
         # .version file should NOT be created (v2 contract)
         assert not (project / ".semver" / ".version").exists()
@@ -98,8 +98,8 @@ class TestInstallFreshProject:
         mode = (project / ".semver" / "git-semver").stat().st_mode
         assert mode & 0o111, "git-semver should be executable"
 
-        mode = (project / ".semver" / "semver").stat().st_mode
-        assert mode & 0o111, "semver should be executable"
+        mode = (project / ".semver" / "release").stat().st_mode
+        assert mode & 0o111, "release should be executable"
 
     def test_installs_workflow_templates(self, tmp_path):
         script = _stub_install_sh(tmp_path)
@@ -258,7 +258,7 @@ class TestV2EnvVars:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         # Code files go to custom dir
         assert (project / custom_dir / "git-semver").exists()
-        assert (project / custom_dir / "semver").exists()
+        assert (project / custom_dir / "release").exists()
         # Config goes to .vendored/configs/
         assert (project / ".vendored" / "configs" / "git-semver.json").exists()
 
@@ -307,7 +307,7 @@ class TestV2Manifest:
         lines = manifest_path.read_text().strip().split("\n")
         # Should include code files and workflow (fresh install)
         assert ".semver/git-semver" in lines
-        assert ".semver/semver" in lines
+        assert ".semver/release" in lines
         assert ".github/workflows/version-bump.yml" in lines
 
     def test_manifest_not_written_when_env_var_unset(self, tmp_path):
@@ -358,7 +358,7 @@ class TestV2Manifest:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         lines = manifest_path.read_text().strip().split("\n")
         assert f"{custom_dir}/git-semver" in lines
-        assert f"{custom_dir}/semver" in lines
+        assert f"{custom_dir}/release" in lines
 
     def test_manifest_excludes_existing_workflow(self, tmp_path):
         """Workflow not in manifest when it already existed (wasn't installed)."""
@@ -468,12 +468,12 @@ class TestWorkflowTemplateConditions:
         assert "!startsWith(github.event.head_commit.message, 'chore: bump version')" in bump_cond
         assert "startsWith(github.event.head_commit.message, 'chore: bump version')" in publish_cond
 
-    def test_bump_calls_semver_bump(self):
+    def test_bump_calls_release_bump(self):
         steps = self.wf["jobs"]["bump"]["steps"]
         run_steps = [s for s in steps if "run" in s]
-        assert any("semver bump" in s["run"] for s in run_steps)
+        assert any("release bump" in s["run"] for s in run_steps)
 
-    def test_publish_calls_semver_publish(self):
+    def test_publish_calls_release_publish(self):
         steps = self.wf["jobs"]["publish"]["steps"]
         run_steps = [s for s in steps if "run" in s]
-        assert any("semver publish" in s["run"] for s in run_steps)
+        assert any("release publish" in s["run"] for s in run_steps)
