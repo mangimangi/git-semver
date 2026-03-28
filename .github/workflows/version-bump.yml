@@ -2,11 +2,11 @@
 # Two-job workflow: bump and publish are mutually exclusive.
 #
 # Bump job:  Runs on non-bump pushes to main and workflow_dispatch.
-#            Calls `semver bump` which handles protected branch fallback.
+#            Calls `release bump` which handles protected branch fallback.
 # Publish job: Runs when a `chore: bump version` commit lands on main.
-#              Calls `semver publish` to create tags and GitHub releases.
+#              Calls `release publish` to create tags and GitHub releases.
 #
-# All logic lives in .vendored/pkg/git-semver/semver (updated via vendor install).
+# All logic lives in .vendored/pkg/git-semver/release (updated via vendor install).
 # This workflow is a thin shell: triggers, permissions, and context passing.
 #
 # Uses GITHUB_TOKEN — no PAT required.
@@ -66,7 +66,7 @@ jobs:
           INPUT_BUMP_TYPE: ${{ inputs.bump_type || '' }}
           INPUT_SUBDIRECTORY: ${{ inputs.subdirectory || '' }}
           INPUT_CHANGELOG_DESCRIPTION: ${{ inputs.changelog_description || '' }}
-        run: python3 .vendored/pkg/git-semver/semver bump
+        run: python3 .vendored/pkg/git-semver/release bump
 
   publish:
     runs-on: ubuntu-latest
@@ -83,4 +83,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .vendored/pkg/git-semver/semver publish
+        run: python3 .vendored/pkg/git-semver/release publish

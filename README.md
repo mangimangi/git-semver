@@ -287,7 +287,7 @@ Each component is versioned and tagged independently. On merge, `bump-all` check
 
 A two-job workflow that handles version bumping and GitHub Release creation. The two jobs are mutually exclusive, preventing loops.
 
-The workflow is a **thin shell** that passes GitHub context to `.semver/semver`. All orchestration logic (config reading, bump mode selection, PR creation, release creation) lives in the script, which is updated via the vendor install pipeline — no workflow modifications needed after initial install.
+The workflow is a **thin shell** that passes GitHub context to `.semver/release`. All orchestration logic (config reading, bump mode selection, PR creation, release creation) lives in the script, which is updated via the vendor install pipeline — no workflow modifications needed after initial install.
 
 #### Bump job
 
@@ -373,7 +373,7 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | File | Type | Can Edit? |
 |------|------|-----------|
 | `.semver/git-semver` | Implementation | No — update via install-vendored |
-| `.semver/semver` | Implementation | No — update via install-vendored |
+| `.semver/release` | Implementation | No — update via install-vendored |
 | `.semver/config.json` | Config | Yes — your versioning settings |
 | `.vendored/install` | Implementation | No — update via install-vendored |
 | `.vendored/check` | Implementation | No — update via install-vendored |
