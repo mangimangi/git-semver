@@ -224,6 +224,8 @@ def cmd_bump():
 
 def cmd_publish():
     """Publish subcommand: create tags and GitHub releases."""
+    configure_git()
+    sync_branch()
     git_semver("tag", "--push")
     create_releases()
 
