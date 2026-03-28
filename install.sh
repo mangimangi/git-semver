@@ -13,7 +13,7 @@
 #                        Falls back to curl for public repos when not set.
 #
 # Behavior:
-#   - Always updates: git-semver (core script), semver
+#   - Always updates: git-semver (core script), release
 #   - First install only: workflow template to .github/workflows/ (version-bump; skipped if present)
 #   - Preserves .vendored/configs/git-semver.json (only creates if missing)
 #
@@ -51,9 +51,12 @@ fetch_file "git-semver" "$INSTALL_DIR/git-semver"
 chmod +x "$INSTALL_DIR/git-semver"
 INSTALLED_FILES+=("$INSTALL_DIR/git-semver")
 
-fetch_file "semver" "$INSTALL_DIR/semver"
-chmod +x "$INSTALL_DIR/semver"
-INSTALLED_FILES+=("$INSTALL_DIR/semver")
+fetch_file "release" "$INSTALL_DIR/release"
+chmod +x "$INSTALL_DIR/release"
+INSTALLED_FILES+=("$INSTALL_DIR/release")
+
+# Clean up old script names from prior versions
+rm -f "$INSTALL_DIR/bump-and-release" "$INSTALL_DIR/semver"
 
 echo "Installed git-semver v$VERSION"
 

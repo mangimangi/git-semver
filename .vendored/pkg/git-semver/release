@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""semver — CI orchestration for git-semver.
+"""release — CI orchestration for git-semver.
 
 Subcommands:
     bump      Version bump (push or dispatch event handling)

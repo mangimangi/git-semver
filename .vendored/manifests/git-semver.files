@@ -1,2 +1,3 @@
+.vendored/pkg/git-semver/release
 .vendored/pkg/git-semver/git-semver
 .vendored/pkg/git-semver/semver
