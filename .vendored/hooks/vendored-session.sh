@@ -17,7 +17,10 @@ if [ -z "$MODE" ]; then
     exit 1
 fi
 
-PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || cd "$(dirname "$0")/../.." && pwd)"
+# Ensure ~/.local/bin is on PATH so vendor-created shims are discoverable
+export PATH="$HOME/.local/bin:$PATH"
+
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || { cd "$(dirname "$0")/../.." && pwd; })"
 VENDORED_INSTALL="$PROJECT_DIR/.vendored/install"
 
 if [ ! -f "$VENDORED_INSTALL" ]; then

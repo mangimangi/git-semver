@@ -355,7 +355,7 @@ def check_deps(deps):
     return satisfied, missing
 
 
-def resolve_deps(deps, token, mode, installing_set=None):
+def resolve_deps(deps, token, mode, installing_set=None, private=False):
     """Apply dependency mode for resolved deps.
 
     Modes:
@@ -389,10 +389,15 @@ def resolve_deps(deps, token, mode, installing_set=None):
             if not dep_repo:
                 print(f"::error::Dependency '{dep_name}' has no repo field")
                 sys.exit(1)
+            # Per-dep private field in deps.json, falling back to parent's flag
+            dep_private = dep_info.get("private", private)
+            dep_token = get_auth_token(private=dep_private) if dep_private != private else token
             print(f"  {dep_name}: not installed, auto-installing...")
-            result = install_new_vendor(dep_repo, "latest", token,
+            result = install_new_vendor(dep_repo, "latest", dep_token,
+                                        name=dep_name,
                                         deps_mode="install",
-                                        installing_set=installing_set)
+                                        installing_set=installing_set,
+                                        private=dep_private)
             print(f"  Added vendor: {dep_name}")
         return
 
@@ -662,8 +667,10 @@ def validate_entry(vendor_name, entry):
 # ── Core install logic ────────────────────────────────────────────────────
 
 def install_new_vendor(repo, version, token, name=None, deps_mode=None,
-                       installing_set=None):
+                       installing_set=None, private=False):
     """First-time add: pre-validate, run install.sh, post-validate."""
+    if not name:
+        name = repo.split("/")[-1]
     if installing_set is None:
         installing_set = []
     if repo in installing_set:
@@ -682,23 +689,22 @@ def install_new_vendor(repo, version, token, name=None, deps_mode=None,
     deps = download_deps(repo, ref, token)
     if deps:
         mode = deps_mode if deps_mode is not None else "error"
-        resolve_deps(deps, token, mode, installing_set)
+        resolve_deps(deps, token, mode, installing_set, private=private)
 
     config = load_config()
     vendors = config.get("vendors", {})
 
     # Check not already registered
-    if name and name in vendors:
+    if name in vendors:
         print(f"::error::Vendor '{name}' is already registered.")
         print("Use .vendored/install <vendor> to update existing vendors.")
         sys.exit(1)
 
-    if not name:
-        for vname, vcfg in vendors.items():
-            if vcfg.get("repo") == repo:
-                print(f"::error::Vendor '{vname}' already registered for {repo}.")
-                print("Use .vendored/install <vendor> to update existing vendors.")
-                sys.exit(1)
+    for vname, vcfg in vendors.items():
+        if vcfg.get("repo") == repo:
+            print(f"::error::Vendor '{vname}' already registered for {repo}.")
+            print("Use .vendored/install <vendor> to update existing vendors.")
+            sys.exit(1)
 
     # Snapshot config before
     before_vendors = dict(vendors)
@@ -732,12 +738,35 @@ def install_new_vendor(repo, version, token, name=None, deps_mode=None,
                 json.dump(raw_config, f, indent=2)
                 f.write("\n")
 
+    # Auto-register: if install.sh didn't write a config or wrote one without
+    # _vendor fields, the framework generates the registry entry from what it
+    # already knows (repo, manifest files, vendor name).
     if new_key is None:
-        print("::error::install.sh did not register a vendor in config.")
-        print("install.sh must self-register by adding an entry to .vendored/config.json")
-        sys.exit(1)
+        # install.sh wrote no config — derive vendor name from repo
+        new_key = name if name else repo.split("/")[-1]
+        new_entry = {}
 
-    validate_entry(new_key, new_entry)
+    # Fill in missing registry fields
+    if "repo" not in new_entry:
+        new_entry["repo"] = repo
+    if "install_branch" not in new_entry:
+        new_entry["install_branch"] = f"chore/install-{new_key}"
+    if "protected" not in new_entry:
+        # Derive from manifest: collect unique directory prefixes
+        protected = set()
+        if manifest_files:
+            for f in manifest_files:
+                # Use the top-level directory as a glob pattern
+                parts = f.split("/")
+                if len(parts) > 1:
+                    protected.add(f"{parts[0]}/**")
+                else:
+                    protected.add(f)
+        if not protected:
+            protected = {f".vendored/pkg/{new_key}/**"}
+        new_entry["protected"] = sorted(protected)
+
+    save_vendor_config(new_key, new_entry)
 
     # Process manifest if install.sh wrote one
     if manifest_files:
@@ -1471,22 +1500,23 @@ def main():
     if args.post_install_only:
         # Self-bootstrap re-exec: install already happened, just do
         # post-install steps (output, PR creation) with the new coordinator.
-        vendor_name = args.target
-        if vendor_name not in vendors:
-            print(f"::error::Unknown vendor for post-install: {vendor_name}")
+        # Build results for ALL vendors with manifest versions — the initial
+        # install may have written deps to disk before re-exec triggered.
+        results = []
+        for vname in vendors:
+            ver = read_manifest_version(vname)
+            if ver:
+                r = {
+                    "vendor": vname,
+                    "old_version": "unknown",
+                    "new_version": ver,
+                    "changed": True,
+                }
+                output_result(r)
+                results.append(r)
+        if not results:
+            print(f"::error::No manifest versions found for post-install")
             sys.exit(1)
-        current_version = read_manifest_version(vendor_name)
-        if not current_version:
-            print(f"::error::No manifest version found for {vendor_name}")
-            sys.exit(1)
-        result = {
-            "vendor": vendor_name,
-            "old_version": "unknown",
-            "new_version": current_version,
-            "changed": True,
-        }
-        output_result(result)
-        results = [result]
         if args.pr:
             create_pull_request(results)
         return
@@ -1509,7 +1539,8 @@ def main():
         # New vendor (owner/repo format) — add path
         token = get_auth_token(private=args.private)
         result = install_new_vendor(args.target, args.version, token, args.name,
-                                    deps_mode=args.deps)
+                                    deps_mode=args.deps,
+                                    private=args.private)
         output_result(result)
         results = [result]
     elif args.target in vendors:
