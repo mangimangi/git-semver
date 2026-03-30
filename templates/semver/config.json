@@ -1,8 +1,8 @@
 {
   "version_file": "VERSION",
   "_comment_version_file": "File that stores the current version string (default: VERSION)",
-  "changelog": true,
-  "_comment_changelog": "Generate CHANGELOG.md on bump. Set false to disable, or use {\"file\": \"CHANGES.md\", \"ignore_prefixes\": [\"chore:\"]}",
+  "changelog": {"enabled": true},
+  "_comment_changelog": "Changelog generation on bump. Set enabled:false to disable. Optional keys: file (default CHANGELOG.md), ignore_prefixes (array of commit prefixes to filter)",
   "_comment_files": "Optional: glob patterns for files whose changes trigger automatic patch bumps on merge. Example: \"files\": [\"src/**/*.py\", \"lib/**/*.js\"]",
   "_comment_updates": "Optional: files to update with new version on bump. \"file\" replaces entire file; [\"pattern\"] does find-and-replace. Example: \"updates\": {\"setup.py\": [\"version = \"]}",
   "_comment_subdirs": "Optional: add subdirectory configs as top-level keys for monorepo support. Tags become <subdir>/vX.Y.Z. Example: \"frontend\": {\"version_file\": \"frontend/VERSION\", \"files\": [\"frontend/**/*.js\"]}",

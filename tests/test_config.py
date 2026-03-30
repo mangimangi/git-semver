@@ -230,6 +230,39 @@ class TestParseChangelogConfig:
         assert f == "CHANGELOG.md"
         assert prefixes == []
 
+    def test_object_form_enabled_true(self):
+        config = {
+            "files": [], "updates": {},
+            "changelog": {"enabled": True},
+        }
+        enabled, f, prefixes = git_semver.parse_changelog_config(config)
+        assert enabled is True
+        assert f == "CHANGELOG.md"
+        assert prefixes == []
+
+    def test_object_form_enabled_false(self):
+        config = {
+            "files": [], "updates": {},
+            "changelog": {"enabled": False},
+        }
+        enabled, f, _ = git_semver.parse_changelog_config(config)
+        assert enabled is False
+        assert f is None
+
+    def test_object_form_all_keys(self):
+        config = {
+            "files": [], "updates": {},
+            "changelog": {
+                "enabled": True,
+                "file": "CHANGES.md",
+                "ignore_prefixes": ["chore:", "docs:"],
+            },
+        }
+        enabled, f, prefixes = git_semver.parse_changelog_config(config)
+        assert enabled is True
+        assert f == "CHANGES.md"
+        assert prefixes == ["chore:", "docs:"]
+
     def test_subdir_inherits_root_enabled(self):
         config = {
             "changelog": True,
@@ -261,6 +294,14 @@ class TestParseChangelogConfig:
         assert f == "frontend/CHANGELOG.md"
         assert prefixes == ["chore:"]
 
+    def test_subdir_inherits_root_object_disabled(self):
+        config = {
+            "changelog": {"enabled": False},
+            "frontend": {"files": [], "updates": {}},
+        }
+        enabled, _, _ = git_semver.parse_changelog_config(config, subdir="frontend")
+        assert enabled is False
+
     def test_subdir_own_changelog_config(self):
         config = {
             "changelog": True,
@@ -279,6 +320,17 @@ class TestParseChangelogConfig:
             "frontend": {
                 "files": [], "updates": {},
                 "changelog": False,
+            },
+        }
+        enabled, _, _ = git_semver.parse_changelog_config(config, subdir="frontend")
+        assert enabled is False
+
+    def test_subdir_disables_via_object(self):
+        config = {
+            "changelog": True,
+            "frontend": {
+                "files": [], "updates": {},
+                "changelog": {"enabled": False},
             },
         }
         enabled, _, _ = git_semver.parse_changelog_config(config, subdir="frontend")
@@ -370,3 +422,17 @@ class TestParseChangelogValue:
     def test_custom_default_file(self):
         enabled, f, _ = git_semver._parse_changelog_value(True, "custom.md")
         assert f == "custom.md"
+
+    def test_object_enabled_true(self):
+        assert git_semver._parse_changelog_value({"enabled": True}) == (True, "CHANGELOG.md", [])
+
+    def test_object_enabled_false(self):
+        assert git_semver._parse_changelog_value({"enabled": False}) == (False, None, [])
+
+    def test_object_with_all_keys(self):
+        cl = {"enabled": True, "file": "CHANGES.md", "ignore_prefixes": ["chore:"]}
+        assert git_semver._parse_changelog_value(cl) == (True, "CHANGES.md", ["chore:"])
+
+    def test_object_enabled_false_ignores_other_keys(self):
+        cl = {"enabled": False, "file": "CHANGES.md", "ignore_prefixes": ["chore:"]}
+        assert git_semver._parse_changelog_value(cl) == (False, None, [])
