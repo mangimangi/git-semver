@@ -66,6 +66,11 @@ if [ ! -f .vendored/configs/git-semver.json ]; then
     echo "Created .vendored/configs/git-semver.json (configure your file patterns!)"
 fi
 
+# Install config schema for vendor audit validation
+mkdir -p .vendored/manifests
+fetch_file "templates/config.schema" ".vendored/manifests/git-semver.schema"
+INSTALLED_FILES+=(".vendored/manifests/git-semver.schema")
+
 # Helper to install a workflow file (first install only)
 install_workflow() {
     local workflow="$1"

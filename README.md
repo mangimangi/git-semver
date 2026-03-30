@@ -218,11 +218,17 @@ Pattern matching for updates:
 
 **`changelog`** (default: enabled)
 
-| Value | Behavior |
-|-------|----------|
-| absent / `true` | Enabled, defaults: `CHANGELOG.md`, no ignore prefixes |
-| `false` | Disabled entirely |
-| `{ "file": "...", "ignore_prefixes": [...] }` | Custom file path and/or commit prefix filters |
+Object with optional keys:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable/disable changelog generation |
+| `file` | string | `"CHANGELOG.md"` | Path to the changelog file |
+| `ignore_prefixes` | array | `[]` | Commit message prefixes to filter out |
+
+Example: `{"enabled": true, "file": "CHANGES.md", "ignore_prefixes": ["chore:", "docs:"]}`
+
+> **Deprecated shorthand**: boolean `true`/`false` values are still accepted for backward compatibility but the object format is preferred.
 
 When enabled, collects commit messages since the last tag, filters out noise prefixes, and prepends a dated entry under `## [version] - date`.
 
@@ -375,6 +381,7 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | `.semver/git-semver` | Implementation | No — update via install-vendored |
 | `.semver/release` | Implementation | No — update via install-vendored |
 | `.semver/config.json` | Config | Yes — your versioning settings |
+| `.vendored/manifests/git-semver.schema` | Schema | No — installed by git-semver, used by `audit` |
 | `.vendored/install` | Implementation | No — update via install-vendored |
 | `.vendored/check` | Implementation | No — update via install-vendored |
 | `.vendored/config.json` | Config | Yes — vendor registry |

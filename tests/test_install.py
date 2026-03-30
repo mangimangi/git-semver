@@ -13,6 +13,7 @@ INSTALL_SH = ROOT / "install.sh"
 # Template content that install.sh would fetch from the repo
 TEMPLATE_VERSION_BUMP = (ROOT / "templates" / "github" / "workflows" / "version-bump.yml").read_text()
 TEMPLATE_CONFIG = (ROOT / "templates" / "semver" / "config.json").read_text()
+TEMPLATE_SCHEMA = (ROOT / "templates" / "config.schema").read_text()
 CORE_SCRIPT = (ROOT / "git-semver").read_text()
 RELEASE_SCRIPT = (ROOT / "release").read_text()
 
@@ -34,6 +35,7 @@ def _stub_install_sh(tmp_path: Path) -> Path:
     (templates / "github" / "workflows" / "version-bump.yml").write_text(TEMPLATE_VERSION_BUMP)
     (templates / "semver").mkdir(parents=True)
     (templates / "semver" / "config.json").write_text(TEMPLATE_CONFIG)
+    (templates / "config.schema").write_text(TEMPLATE_SCHEMA)
 
     # Read original install.sh and replace fetch_file with local copy
     original = INSTALL_SH.read_text()
@@ -108,6 +110,20 @@ class TestInstallFreshProject:
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (project / ".github" / "workflows" / "version-bump.yml").exists()
+
+    def test_installs_config_schema(self, tmp_path):
+        script = _stub_install_sh(tmp_path)
+        result = _run_install(tmp_path, script)
+        project = tmp_path / "project"
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        schema_path = project / ".vendored" / "manifests" / "git-semver.schema"
+        assert schema_path.exists()
+        import json
+        schema = json.loads(schema_path.read_text())
+        assert "fields" in schema
+        assert "version_file" in schema["fields"]
+        assert "changelog" in schema["fields"]
 
     def test_output_reports_success(self, tmp_path):
         script = _stub_install_sh(tmp_path)
