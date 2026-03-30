@@ -381,6 +381,7 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | `.semver/git-semver` | Implementation | No — update via install-vendored |
 | `.semver/release` | Implementation | No — update via install-vendored |
 | `.semver/config.json` | Config | Yes — your versioning settings |
+| `.vendored/manifests/git-semver.schema` | Schema | No — installed by git-semver, used by `audit` |
 | `.vendored/install` | Implementation | No — update via install-vendored |
 | `.vendored/check` | Implementation | No — update via install-vendored |
 | `.vendored/config.json` | Config | Yes — vendor registry |
