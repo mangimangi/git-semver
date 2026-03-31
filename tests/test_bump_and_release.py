@@ -202,7 +202,7 @@ class TestTryPushOrPr:
 # ── handle_push_bump ──────────────────────────────────────────────────────
 
 class TestHandlePushBump:
-    def test_automerge_bumps_and_pushes(self, mock_run, env):
+    def test_automerge_bumps_pushes_and_tags_inline(self, mock_run, env):
         calls, set_response = mock_run
         env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REPOSITORY="owner/repo",
             GITHUB_REF="refs/heads/main")
@@ -220,23 +220,31 @@ class TestHandlePushBump:
                 return _make_result(stdout="chore: bump version v1.0.1\n")
             if cmd[:2] == ("git", "push") and len(cmd) == 2:
                 return _make_result(returncode=0)
+            if cmd[:3] == ("git", "tag", "--points-at"):
+                return _make_result(stdout="v1.0.1\nlatest\n")
             return _make_result()
 
         with mock_patch.object(bar, "run", _run):
             bar.handle_push_bump(automerge=True)
 
-        # Check git-semver was called with --no-push
+        # Check git-semver was called with --no-push first, then tag --push
         semver_calls = [c for c in original_calls if c[0] == bar.SEMVER_SCRIPT]
-        assert len(semver_calls) == 1
+        assert len(semver_calls) == 2
         assert "--no-push" in semver_calls[0]
         assert "--since" in semver_calls[0]
+        assert semver_calls[1] == (bar.SEMVER_SCRIPT, "tag", "--push")
 
         # Check git push was attempted (automerge=True)
         push_calls = [c for c in original_calls
                       if c[:2] == ("git", "push") and len(c) == 2]
         assert len(push_calls) == 1
 
-    def test_automerge_protected_branch_falls_back_to_pr(self, mock_run, env):
+        # Check GitHub release created (not for 'latest')
+        gh_calls = [c for c in original_calls if c[0] == "gh"]
+        assert len(gh_calls) == 1
+        assert "v1.0.1" in gh_calls[0]
+
+    def test_automerge_protected_branch_falls_back_to_pr_no_tag(self, mock_run, env):
         calls, set_response = mock_run
         env(GITHUB_EVENT_BEFORE="abc123", GITHUB_REF="refs/heads/main")
 
@@ -262,6 +270,11 @@ class TestHandlePushBump:
         gh_calls = [c for c in original_calls if c[0] == "gh"]
         assert len(gh_calls) == 1
         assert gh_calls[0][:3] == ("gh", "pr", "create")
+
+        # No inline tagging — publish job handles it after PR merge
+        semver_calls = [c for c in original_calls if c[0] == bar.SEMVER_SCRIPT]
+        tag_calls = [c for c in semver_calls if "tag" in c]
+        assert len(tag_calls) == 0
 
     def test_pr_mode_creates_pr_when_changes(self, mock_run, env):
         calls, set_response = mock_run
@@ -333,25 +346,34 @@ class TestHandlePushBump:
 # ── handle_dispatch_bump ──────────────────────────────────────────────────
 
 class TestHandleDispatchBump:
-    def test_automerge_with_bump_type(self, mock_run, env):
+    def test_automerge_bumps_pushes_and_tags_inline(self, mock_run, env):
         calls, set_response = mock_run
         env(INPUT_BUMP_TYPE="minor", GITHUB_REPOSITORY="owner/repo")
         set_response(["git", "log", "-1", "--pretty=%s"],
                      stdout="chore: bump version to v1.1.0\n")
         set_response(["git", "push"], returncode=0)
+        set_response(["git", "tag", "--points-at", "HEAD"],
+                     stdout="v1.1.0\nlatest\n")
 
         bar.handle_dispatch_bump(automerge=True)
 
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
-        assert len(semver_calls) == 1
-        # Always uses --no-push
+        assert len(semver_calls) == 2
+        # First call: bump --no-push
         assert "--no-push" in semver_calls[0]
         assert "minor" in semver_calls[0]
+        # Second call: tag --push
+        assert semver_calls[1] == (bar.SEMVER_SCRIPT, "tag", "--push")
 
         # Push attempted
         push_calls = [c for c in calls
                       if c[:2] == ("git", "push") and len(c) == 2]
         assert len(push_calls) == 1
+
+        # Release created
+        gh_calls = [c for c in calls if c[0] == "gh"]
+        assert len(gh_calls) == 1
+        assert "v1.1.0" in gh_calls[0]
 
     def test_automerge_with_subdir_and_description(self, mock_run, env):
         calls, set_response = mock_run
@@ -364,6 +386,8 @@ class TestHandleDispatchBump:
         set_response(["git", "log", "-1", "--pretty=%s"],
                      stdout="chore: bump version to frontend/v2.0.0\n")
         set_response(["git", "push"], returncode=0)
+        set_response(["git", "tag", "--points-at", "HEAD"],
+                     stdout="frontend/v2.0.0\nlatest\n")
 
         bar.handle_dispatch_bump(automerge=True)
 
@@ -373,6 +397,7 @@ class TestHandleDispatchBump:
             "--subdir", "frontend",
             "--description", "Breaking change",
         ) == semver_calls[0]
+        assert semver_calls[1] == (bar.SEMVER_SCRIPT, "tag", "--push")
 
     def test_pr_mode_creates_pr(self, mock_run, env):
         calls, set_response = mock_run
@@ -418,14 +443,16 @@ class TestHandleDispatchBump:
         set_response(["git", "log", "-1", "--pretty=%s"],
                      stdout="chore: bump version to v1.0.1\n")
         set_response(["git", "push"], returncode=0)
+        set_response(["git", "tag", "--points-at", "HEAD"],
+                     stdout="v1.0.1\nlatest\n")
 
         bar.handle_dispatch_bump(automerge=True)
 
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
         assert "patch" in semver_calls[0]
 
-    def test_dispatch_protected_branch_falls_back(self, mock_run, env):
-        """Dispatch with automerge=True falls back to PR on protected branch."""
+    def test_dispatch_protected_branch_falls_back_no_tag(self, mock_run, env):
+        """Dispatch with automerge=True falls back to PR on protected branch — no inline tagging."""
         calls, set_response = mock_run
         env(INPUT_BUMP_TYPE="patch")
         set_response(["git", "log", "-1", "--pretty=%s"],
@@ -440,6 +467,11 @@ class TestHandleDispatchBump:
         gh_calls = [c for c in calls if c[0] == "gh"]
         assert len(gh_calls) == 1
         assert gh_calls[0][:3] == ("gh", "pr", "create")
+
+        # No inline tagging — publish job handles it after PR merge
+        semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
+        tag_calls = [c for c in semver_calls if "tag" in c]
+        assert len(tag_calls) == 0
 
 
 # ── create_releases ─────────────────────────────────────────────────────────
