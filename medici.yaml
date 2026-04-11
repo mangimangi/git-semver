@@ -1,0 +1,12 @@
+prefix: gsv
+description: "Automated semantic versioning via GitHub workflows"
+docs: [AGENTS.md, README.md, docs/]
+eval:
+  threshold: 80
+providers:
+  issues:
+    name: pearls
+    docs: "cat .vendored/pkg/pearls/AGENTS.md"
+  docs:
+    name: repo
+    docs: "cat docs/README.md"
