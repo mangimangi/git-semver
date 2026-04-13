@@ -1,0 +1,6 @@
+{
+  "prefix": "gsv",
+  "eval": {
+    "threshold": 80
+  }
+}

@@ -1,7 +1,5 @@
 description: "Automated semantic versioning via GitHub workflows"
 docs: [AGENTS.md, README.md, docs/]
-eval:
-  threshold: 80
 providers:
   issues:
     name: pearls
