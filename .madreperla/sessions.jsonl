@@ -1,2 +1,2 @@
 {"id":"8741f1d3-9c01-4279-9904-0f98f0a2359a","mode":"refine","epic":"gsv-3086","branch":"gsv-3086/plan","created_at":"2026-04-14T07:21:53.517733+00:00","updated_at":"2026-04-14T07:22:33.635152+00:00","exit_code":0,"cost":{"input":10,"output":1397}}
-{"id":"3e2c8a7f-5b0e-49e2-b5b7-4952d6e9b134","mode":"refine","epic":"gsv-3086","branch":"gsv-3086/plan","created_at":"2026-04-14T07:24:46.631043+00:00","updated_at":null,"exit_code":null,"cost":null}
+{"id":"3e2c8a7f-5b0e-49e2-b5b7-4952d6e9b134","mode":"refine","epic":"gsv-3086","branch":"gsv-3086/plan","created_at":"2026-04-14T07:24:46.631043+00:00","updated_at":"2026-04-14T07:25:41.524099+00:00","exit_code":0,"cost":{"input":13,"output":2481}}
