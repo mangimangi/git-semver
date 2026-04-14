@@ -8,7 +8,7 @@ Subcommands:
     bump-all --since <commit> [opts] Check all components, bump all triggered
     tag [--push] [--subdir <name>]   Create version tags from VERSION files
 
-Config: .semver/config.json (see README for schema)
+Config: .vendored/configs/git-semver.json (see README for schema)
 """
 
 import argparse

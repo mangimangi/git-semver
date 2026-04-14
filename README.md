@@ -36,14 +36,14 @@ The `install-vendored.yml` workflow handles updates for all vendored tools (incl
 your-project/
 ├── .semver/
 │   ├── git-semver         # Core versioning script (don't edit)
-│   ├── semver             # CI orchestration script (don't edit)
+│   ├── release            # CI orchestration script (don't edit)
 │   └── config.json        # Your config (edit this!)
 └── .github/
     └── workflows/
         └── version-bump.yml          # Auto-bump + release on merge
 ```
 
-When installed via the git-vendored v2 framework, code files (`git-semver`, `semver`) may live in `.vendored/pkg/git-semver/` instead of `.semver/`. Config always stays in `.semver/config.json`.
+When installed via the git-vendored v2 framework, code files (`git-semver`, `release`) may live in `.vendored/pkg/git-semver/` instead of `.semver/`. Config lives at `.vendored/configs/git-semver.json`.
 
 The workflow is a thin shell — all logic lives in the scripts. Updates to versioning behavior are delivered via `install-vendored.yml` without modifying the workflow file.
 
@@ -342,23 +342,26 @@ Squash merges work correctly: GitHub uses the PR title as the squash commit mess
 
 ## Vendor Management
 
-git-semver uses [git-vendored](git-vendored/) for unified install/protection across all vendored tools. See the [git-vendored README](git-vendored/) for full details.
+git-semver uses git-vendored for unified install/protection across all vendored tools.
 
 ### Installed vendor infrastructure
 
 ```
 .vendored/
-├── config.json        # Vendor registry (edit this to add vendors)
-├── .version           # git-vendored version tracker
-├── install            # Vendored script — installs/updates vendors
-└── check              # Vendored script — protects vendor files on PR
-.dogfood/
-├── .version           # git-dogfood version tracker
-└── resolve            # Vendored script — finds dogfood vendor
+├── config.json              # Vendor registry (edit this to add vendors)
+├── install                  # Vendored script — installs/updates vendors
+├── check                    # Vendored script — protects vendor files on PR
+├── configs/
+│   └── git-semver.json      # Your versioning config (edit this!)
+├── manifests/               # Version and schema tracking per vendor
+└── pkg/
+    ├── git-semver/          # Core scripts (git-semver, release)
+    └── git-dogfood/
+        └── resolve          # Finds dogfood vendor
 .github/workflows/
-├── install-vendored.yml   # Installs/updates any vendor
-├── check-vendor.yml       # Blocks direct edits to vendor files
-└── dogfood.yml            # Triggers self-update after release
+├── install-vendored.yml     # Installs/updates any vendor
+├── check-vendor.yml         # Blocks direct edits to vendor files
+└── dogfood.yml              # Triggers self-update after release
 ```
 
 ### How it works
@@ -378,15 +381,15 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 
 | File | Type | Can Edit? |
 |------|------|-----------|
-| `.semver/git-semver` | Implementation | No — update via install-vendored |
-| `.semver/release` | Implementation | No — update via install-vendored |
-| `.semver/config.json` | Config | Yes — your versioning settings |
+| `.vendored/pkg/git-semver/git-semver` | Implementation | No — update via install-vendored |
+| `.vendored/pkg/git-semver/release` | Implementation | No — update via install-vendored |
+| `.vendored/configs/git-semver.json` | Config | Yes — your versioning settings |
 | `.vendored/manifests/git-semver.schema` | Schema | No — installed by git-semver, used by `audit` |
 | `.vendored/install` | Implementation | No — update via install-vendored |
 | `.vendored/check` | Implementation | No — update via install-vendored |
 | `.vendored/config.json` | Config | Yes — vendor registry |
-| `.vendored/.version` | Meta | Auto-managed |
-| `.dogfood/resolve` | Implementation | No — update via install-vendored |
+| `.vendored/manifests/*` | Meta | Auto-managed |
+| `.vendored/pkg/git-dogfood/resolve` | Implementation | No — update via install-vendored |
 | `.github/workflows/version-bump.yml` | Workflow | No — installed by git-semver |
 | `.github/workflows/install-vendored.yml` | Workflow | No — installed by git-vendored |
 | `.github/workflows/check-vendor.yml` | Workflow | No — installed by git-vendored |
