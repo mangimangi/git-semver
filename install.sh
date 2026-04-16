@@ -71,16 +71,23 @@ mkdir -p .vendored/manifests
 fetch_file "templates/config.schema" ".vendored/manifests/git-semver.schema"
 INSTALLED_FILES+=(".vendored/manifests/git-semver.schema")
 
-# Helper to install a workflow file (first install only)
+# Helper to install a workflow file (first install only).
+# Substitutes __INSTALL_DIR__ with VENDOR_INSTALL_DIR so the workflow's `run:`
+# paths match where release scripts were actually installed.
 install_workflow() {
     local workflow="$1"
-    if [ -f ".github/workflows/$workflow" ]; then
-        echo "Workflow .github/workflows/$workflow already exists, skipping"
+    local dest=".github/workflows/$workflow"
+    if [ -f "$dest" ]; then
+        echo "Workflow $dest already exists, skipping"
         return
     fi
-    if fetch_file "templates/github/workflows/$workflow" ".github/workflows/$workflow" 2>/dev/null; then
-        INSTALLED_FILES+=(".github/workflows/$workflow")
-        echo "Installed .github/workflows/$workflow"
+    if fetch_file "templates/github/workflows/$workflow" "$dest" 2>/dev/null; then
+        local tmp
+        tmp="$(mktemp)"
+        sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$dest" > "$tmp"
+        mv "$tmp" "$dest"
+        INSTALLED_FILES+=("$dest")
+        echo "Installed $dest"
     fi
 }
 

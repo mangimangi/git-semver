@@ -6,8 +6,9 @@
 # Publish job: Runs when a `chore: bump version` commit lands on main.
 #              Calls `release publish` to create tags and GitHub releases.
 #
-# All logic lives in .vendored/pkg/git-semver/release (updated via vendor install).
+# All logic lives in __INSTALL_DIR__/release (updated via vendor install).
 # This workflow is a thin shell: triggers, permissions, and context passing.
+# __INSTALL_DIR__ is substituted by install.sh at copy time with VENDOR_INSTALL_DIR.
 #
 # Uses GITHUB_TOKEN — no PAT required.
 
@@ -66,7 +67,7 @@ jobs:
           INPUT_BUMP_TYPE: ${{ inputs.bump_type || '' }}
           INPUT_SUBDIRECTORY: ${{ inputs.subdirectory || '' }}
           INPUT_CHANGELOG_DESCRIPTION: ${{ inputs.changelog_description || '' }}
-        run: python3 .vendored/pkg/git-semver/release bump
+        run: python3 __INSTALL_DIR__/release bump
 
   publish:
     runs-on: ubuntu-latest
@@ -83,4 +84,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .vendored/pkg/git-semver/release publish
+        run: python3 __INSTALL_DIR__/release publish

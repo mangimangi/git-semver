@@ -300,6 +300,47 @@ class TestV2EnvVars:
         assert "VENDOR_INSTALL_DIR" in result.stderr
 
 
+class TestWorkflowInstallDirInterpolation:
+    """Tests that install.sh substitutes __INSTALL_DIR__ in the workflow template."""
+
+    def test_workflow_uses_custom_install_dir(self, tmp_path):
+        """Installed workflow must reference VENDOR_INSTALL_DIR, not hardcoded path."""
+        script = _stub_install_sh(tmp_path)
+        project = tmp_path / "project"
+        project.mkdir(exist_ok=True)
+
+        custom_dir = "vendor/git-semver"
+        result = subprocess.run(
+            ["bash", str(script), "1.2.3"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VENDOR_INSTALL_DIR": custom_dir},
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        wf = (project / ".github" / "workflows" / "version-bump.yml").read_text()
+        assert f"python3 {custom_dir}/release bump" in wf
+        assert f"python3 {custom_dir}/release publish" in wf
+        assert "__INSTALL_DIR__" not in wf
+
+    def test_workflow_uses_default_install_dir(self, tmp_path):
+        """Default .semver install dir substitutes into workflow run commands."""
+        script = _stub_install_sh(tmp_path)
+        _run_install(tmp_path, script)
+        project = tmp_path / "project"
+
+        wf = (project / ".github" / "workflows" / "version-bump.yml").read_text()
+        assert "python3 .semver/release bump" in wf
+        assert "python3 .semver/release publish" in wf
+        assert "__INSTALL_DIR__" not in wf
+
+    def test_template_has_placeholder(self):
+        """Template ships with __INSTALL_DIR__ placeholder, not a hardcoded path."""
+        assert "__INSTALL_DIR__/release" in TEMPLATE_VERSION_BUMP
+        assert ".vendored/pkg/git-semver/release" not in TEMPLATE_VERSION_BUMP
+
+
 class TestV2Manifest:
     """Tests for VENDOR_MANIFEST emission."""
 
