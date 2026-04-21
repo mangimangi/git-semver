@@ -2,6 +2,10 @@
 
 > Per-repo planning doc for epic `gsv-a433`
 
+## Scope
+
+- `gsv-a433.1` — Migrate docs to `.pearls/docs/` and simplify providers config (covers all steps below)
+
 ## Design decisions
 
 - **One issue**: entire migration is one atomic issue — config + move + regenerate + verify. No partial states.
