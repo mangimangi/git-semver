@@ -142,7 +142,7 @@ Creates version tags from VERSION files without modifying any files. Reads the c
 | `--subdir <name>` | Tag a specific subdirectory instead of all components |
 | `--config <path>` | Specify a non-default config file |
 
-Idempotent: if a version tag already exists at HEAD, no error is raised.
+Idempotent: if a version tag already exists (at any commit), it is skipped. In a monorepo this is the expected state for untouched components — only the bumped component has a new version that needs tagging.
 
 ### Local usage
 
