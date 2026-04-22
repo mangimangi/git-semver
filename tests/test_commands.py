@@ -600,8 +600,8 @@ class TestCmdTag:
         git_cmds = [c[0] for c in calls]
         assert ("push", "--tags", "--force") not in git_cmds
 
-    def test_tag_idempotent_at_head(self, make_config, make_version_file, mock_git, capsys):
-        """No error when tag already exists at HEAD."""
+    def test_tag_skipped_when_already_exists(self, make_config, make_version_file, mock_git, capsys):
+        """Skip (don't error) when a tag for the current version already exists."""
         path = make_config({
             "files": [], "updates": {},
             "changelog": False,
@@ -609,19 +609,11 @@ class TestCmdTag:
         make_version_file("1.0.0")
         calls, mock = mock_git
 
-        head_sha = "abc123"
-
         def side_effect(*args, **kwargs):
             r = MagicMock()
             r.returncode = 0
             if args[0] == "tag" and args[1] == "-l":
                 r.stdout = "v1.0.0"
-                return r
-            if args[0] == "rev-list":
-                r.stdout = head_sha
-                return r
-            if args[0] == "rev-parse":
-                r.stdout = head_sha
                 return r
             r.stdout = ""
             return r
@@ -630,39 +622,87 @@ class TestCmdTag:
 
         git_semver.cmd_tag(make_args(config=path))
         out = capsys.readouterr().out
-        assert "already exists at HEAD" in out
+        assert "already exists" in out
         # Tag should NOT be re-created (no tag -a call)
         git_cmds = [c[0] for c in calls]
         assert ("tag", "-a", "v1.0.0", "-m", "v1.0.0") not in git_cmds
 
-    def test_tag_errors_when_exists_at_different_commit(self, make_config, make_version_file, mock_git):
-        """Clear error when tag exists at a different commit than HEAD."""
+    def test_tag_monorepo_skips_untouched_component(
+        self, make_config, make_version_file, mock_git, capsys,
+    ):
+        """In a monorepo, only the bumped component gets a new tag; the
+        untouched component's tag already exists (at a prior commit) and is
+        skipped instead of erroring."""
         path = make_config({
+            "version_file": "VERSION",
             "files": [], "updates": {},
+            "frontend": {
+                "version_file": "frontend/VERSION",
+                "files": [], "updates": {},
+            },
             "changelog": False,
         })
-        make_version_file("1.0.0")
+        # root was bumped (tag doesn't exist yet); frontend was not (tag exists)
+        make_version_file("1.1.0")
+        make_version_file("2.0.0", path="frontend/VERSION")
         calls, mock = mock_git
 
         def side_effect(*args, **kwargs):
             r = MagicMock()
             r.returncode = 0
             if args[0] == "tag" and args[1] == "-l":
-                r.stdout = "v1.0.0"
-                return r
-            if args[0] == "rev-list":
-                r.stdout = "oldcommit1234"
-                return r
-            if args[0] == "rev-parse":
-                r.stdout = "newcommit5678"
+                # v1.1.0 is new; frontend/v2.0.0 already exists
+                r.stdout = "frontend/v2.0.0" if args[2] == "frontend/v2.0.0" else ""
                 return r
             r.stdout = ""
             return r
 
         mock.side_effect = side_effect
 
-        with pytest.raises(git_semver.SemverError, match="already exists at commit"):
-            git_semver.cmd_tag(make_args(config=path))
+        git_semver.cmd_tag(make_args(config=path))
+        out = capsys.readouterr().out
+        assert "Tagged root: v1.1.0" in out
+        assert "frontend/v2.0.0 already exists" in out
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-a", "v1.1.0", "-m", "v1.1.0") in git_cmds
+        assert ("tag", "-a", "frontend/v2.0.0", "-m", "frontend/v2.0.0") not in git_cmds
+
+    def test_tag_monorepo_skips_root_when_only_subdir_bumped(
+        self, make_config, make_version_file, mock_git, capsys,
+    ):
+        """Converse case: only subdir bumped, root tag already exists."""
+        path = make_config({
+            "version_file": "VERSION",
+            "files": [], "updates": {},
+            "frontend": {
+                "version_file": "frontend/VERSION",
+                "files": [], "updates": {},
+            },
+            "changelog": False,
+        })
+        make_version_file("1.0.0")
+        make_version_file("2.1.0", path="frontend/VERSION")
+        calls, mock = mock_git
+
+        def side_effect(*args, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            if args[0] == "tag" and args[1] == "-l":
+                # v1.0.0 already exists; frontend/v2.1.0 is new
+                r.stdout = "v1.0.0" if args[2] == "v1.0.0" else ""
+                return r
+            r.stdout = ""
+            return r
+
+        mock.side_effect = side_effect
+
+        git_semver.cmd_tag(make_args(config=path))
+        out = capsys.readouterr().out
+        assert "v1.0.0 already exists" in out
+        assert "Tagged frontend: frontend/v2.1.0" in out
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "-a", "v1.0.0", "-m", "v1.0.0") not in git_cmds
+        assert ("tag", "-a", "frontend/v2.1.0", "-m", "frontend/v2.1.0") in git_cmds
 
 
 # ── CLI / main ──────────────────────────────────────────────────────────────
