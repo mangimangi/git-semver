@@ -13,6 +13,10 @@ ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
 SYSTEM_TOOLS=(bash sed head mkdir rm ln cat chmod mktemp mv cp base64 dirname
               basename tr grep env sort ls touch readlink)
 
+# Tokens no test may read from the runner. guard.bats fails without the
+# unset in sandbox.
+TOKENS=(CICD_WRITE_TOKEN CICD_READ_TOKEN VENDOR_PAT GH_TOKEN GITHUB_TOKEN)
+
 sandbox() {
     WORK="$BATS_TEST_TMPDIR/work"
     STUBS="$BATS_TEST_TMPDIR/stubs"
@@ -32,7 +36,9 @@ sandbox() {
     export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
     export PATH="$STUBS:$SYSBIN"
     mkdir -p "$HOME"
-    unset CI GH_TOKEN GITHUB_TOKEN VENDOR_PAT RUNNER_TOOL_CACHE \
+    # The token guard: no test sees a real token (TOKENS, below).
+    unset "${TOKENS[@]}"
+    unset CI RUNNER_TOOL_CACHE \
           VENDOR_REF VENDOR_REPO VENDOR_INSTALL_DIR VENDOR_MANIFEST \
           CICD_INPUT_VENDOR CICD_INPUT_VERSION CICD_INPUT_PRIVATE
     cd "$WORK"

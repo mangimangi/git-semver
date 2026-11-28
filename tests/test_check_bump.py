@@ -46,7 +46,8 @@ def args(**kwargs):
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A repo on `main` with root files ["src/**"] at 1.2.3, and a branch `pr`."""
-    for key in ("CICD_BASE", "CICD_HEAD"):
+    for key in ("CICD_BASE", "CICD_HEAD", "CICD_SOURCE_BRANCH",
+                "CICD_TARGET_BRANCH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
     g(tmp_path, "init", "-q", "-b", "main")
@@ -276,6 +277,418 @@ class TestCheckBumpInputs:
         assert g(repo, "rev-parse", "HEAD") == before_head
 
 
+def set_config(repo, **extra):
+    cfg = {"version_file": "VERSION", "files": ["src/**"]}
+    cfg.update(extra)
+    write(repo, CONFIG, json.dumps(cfg))
+
+
+@pytest.fixture
+def pr_repo(repo):
+    """`repo` with bump_on pull_request, an updates target and a changelog."""
+    set_config(repo, bump_on="pull_request",
+               updates={"pkg.py": ["__version__ = "]})
+    write(repo, "pkg.py", '__version__ = "1.2.3"\n')
+    write(repo, "CHANGELOG.md", "# Changelog\n\n## [1.2.3] - 2026-01-01\n")
+    g(repo, "checkout", "-q", "main")
+    commit(repo, "pull request mode")
+    g(repo, "checkout", "-q", "pr")
+    g(repo, "reset", "-q", "--hard", "main")
+    return repo
+
+
+def count(repo):
+    return int(g(repo, "rev-list", "--count", "HEAD"))
+
+
+class TestCheckBumpFix:
+    def test_unbumped_change_gets_one_patch_commit(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo, "feat: change app")
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert count(pr_repo) == before + 1
+        assert (pr_repo / "VERSION").read_text() == "1.2.4\n"
+        assert '__version__ = "1.2.4"' in (pr_repo / "pkg.py").read_text()
+        changelog = (pr_repo / "CHANGELOG.md").read_text()
+        assert "## [1.2.4]" in changelog
+        assert "feat: change app" in changelog
+        assert g(pr_repo, "log", "-1", "--format=%s") == \
+            "chore: bump version (root 1.2.3 -> 1.2.4)"
+        assert sorted(g(pr_repo, "show", "--name-only", "--format=",
+                        "HEAD").split()) == ["CHANGELOG.md", "VERSION", "pkg.py"]
+        assert "Raised root: 1.2.3 -> 1.2.4" in out
+        assert g(pr_repo, "rev-parse", "HEAD") in out
+        assert "git-semver bump patch --no-push" in out
+        assert g(pr_repo, "status", "--porcelain") == ""
+        # The fixed head now passes the check.
+        assert run_check(capsys, base="main")[0] == 0
+
+    def test_root_and_subdir_one_commit(self, pr_repo, capsys):
+        set_config(pr_repo, bump_on="pull_request",
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(pr_repo, "backend/VERSION", "0.3.0\n")
+        write(pr_repo, "backend/CHANGELOG.md", "# Changelog\n")
+        g(pr_repo, "checkout", "-q", "main")
+        commit(pr_repo, "add backend")
+        g(pr_repo, "checkout", "-q", "pr")
+        g(pr_repo, "reset", "-q", "--hard", "main")
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "backend/x.py", "b\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert count(pr_repo) == before + 1
+        assert g(pr_repo, "log", "-1", "--format=%s") == (
+            "chore: bump version (root 1.2.3 -> 1.2.4, backend 0.3.0 -> 0.3.1)")
+        assert (pr_repo / "backend/VERSION").read_text() == "0.3.1\n"
+        assert "## [0.3.1]" in (pr_repo / "backend/CHANGELOG.md").read_text()
+
+    def test_only_unbumped_component_raised(self, pr_repo, capsys):
+        set_config(pr_repo, bump_on="pull_request", changelog=False,
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(pr_repo, "backend/VERSION", "0.3.0\n")
+        g(pr_repo, "checkout", "-q", "main")
+        commit(pr_repo, "add backend")
+        g(pr_repo, "checkout", "-q", "pr")
+        g(pr_repo, "reset", "-q", "--hard", "main")
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "VERSION", "1.3.0\n")
+        write(pr_repo, "backend/x.py", "b\n")
+        commit(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert g(pr_repo, "log", "-1", "--format=%s") == \
+            "chore: bump version (backend 0.3.0 -> 0.3.1)"
+        assert (pr_repo / "VERSION").read_text() == "1.3.0\n"
+        assert g(pr_repo, "show", "--name-only", "--format=", "HEAD") == \
+            "backend/VERSION"
+
+    @pytest.mark.parametrize("new", ["1.2.4", "1.3.0", "2.0.0"])
+    def test_bump_already_made_no_commit(self, pr_repo, capsys, new):
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "VERSION", new + "\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, _ = run_check(capsys, base="main")
+        assert rc == 0
+        assert count(pr_repo) == before
+
+    @pytest.mark.parametrize("version", ["1.2.2\n", "1.3\n", None])
+    def test_down_malformed_missing_never_fixed(self, pr_repo, capsys, version):
+        set_config(pr_repo, bump_on="pull_request",
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(pr_repo, "backend/VERSION", "0.3.0\n")
+        g(pr_repo, "checkout", "-q", "main")
+        commit(pr_repo, "add backend")
+        g(pr_repo, "checkout", "-q", "pr")
+        g(pr_repo, "reset", "-q", "--hard", "main")
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "backend/x.py", "b\n")  # fixable on its own
+        if version is None:
+            (pr_repo / "VERSION").unlink()
+        else:
+            write(pr_repo, "VERSION", version)
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert count(pr_repo) == before
+        assert "root: FAIL" in out
+        assert "Not fixing: the version of root" in out
+        assert g(pr_repo, "status", "--porcelain") == ""
+
+    def test_nothing_changed_no_commit(self, pr_repo, capsys):
+        write(pr_repo, "README.md", "x\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        assert run_check(capsys, base="main")[0] == 0
+        assert count(pr_repo) == before
+
+    def test_no_fix_overrides_pull_request(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main", fix=False)
+        assert rc == 1
+        assert count(pr_repo) == before
+        assert "VERSION is still 1.2.3" in out
+        assert "Raised" not in out
+
+    def test_push_bump_false_checks_only(self, pr_repo, capsys):
+        set_config(pr_repo, bump_on="pull_request", push_bump=False)
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        assert run_check(capsys, base="main")[0] == 1
+        assert count(pr_repo) == before
+
+    def test_merge_mode_default_checks_only(self, repo, capsys):
+        set_config(repo, push_bump=True)
+        write(repo, "src/app.py", "b\n")
+        commit(repo)
+        before = count(repo)
+        assert run_check(capsys, base="main")[0] == 1
+        assert count(repo) == before
+
+    def test_fix_overrides_merge_mode(self, repo, capsys):
+        write(repo, "src/app.py", "b\n")
+        commit(repo)
+        before = count(repo)
+        rc, out = run_check(capsys, base="main", fix=True)
+        assert rc == 1
+        assert count(repo) == before + 1
+        assert (repo / "VERSION").read_text() == "1.2.4\n"
+
+    def test_head_not_checked_out_errors(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        bad = commit(pr_repo)
+        write(pr_repo, "README.md", "later\n")
+        commit(pr_repo)
+        with pytest.raises(git_semver.SemverError,
+                           match=f"head is {bad}, HEAD is "):
+            git_semver.cmd_check_bump(args(base="main", head=bad))
+
+    def test_unrelated_worktree_changes_not_committed(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        write(pr_repo, "README.md", "dirty\n")
+        write(pr_repo, "untracked.txt", "x\n")
+        run_check(capsys, base="main")
+        files = g(pr_repo, "show", "--name-only", "--format=", "HEAD").split()
+        assert "README.md" not in files and "untracked.txt" not in files
+        status = g(pr_repo, "status", "--porcelain")
+        assert "README.md" in status and "untracked.txt" in status
+
+    def test_tag_ahead_baseline_still_above_base(self, pr_repo, capsys):
+        g(pr_repo, "tag", "v1.2.7")
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        run_check(capsys, base="main")
+        assert (pr_repo / "VERSION").read_text() == "1.2.8\n"
+
+    def test_configured_identity_is_used(self, pr_repo, capsys):
+        g(pr_repo, "config", "user.name", "Someone")
+        g(pr_repo, "config", "user.email", "someone@example.com")
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        run_check(capsys, base="main")
+        assert g(pr_repo, "log", "-1", "--format=%ae") == "someone@example.com"
+
+    def test_fallback_identity_without_config(self, pr_repo, capsys,
+                                              monkeypatch):
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        run_check(capsys, base="main")
+        assert g(pr_repo, "log", "-1", "--format=%ae") == \
+            "git-semver@users.noreply.github.com"
+
+
+FAKE_TOKEN = "ghp_FAKEfake0123456789abcdefABCDEF012345"
+FAKE_BASIC = git_semver.token_header(FAKE_TOKEN).split(" ", 2)[2]
+
+
+@pytest.fixture
+def origin_pr(pr_repo, tmp_path_factory, monkeypatch):
+    """pr_repo with an unbumped change on `pr`, pushed to a bare `origin`."""
+    bare = tmp_path_factory.mktemp("origin") / "origin.git"
+    g(pr_repo, "init", "-q", "--bare", str(bare))
+    g(pr_repo, "remote", "add", "origin", str(bare))
+    write(pr_repo, "src/app.py", "b\n")
+    commit(pr_repo, "feat: change app")
+    g(pr_repo, "push", "-q", "origin", "main", "pr")
+    monkeypatch.setenv("CICD_WRITE_TOKEN", FAKE_TOKEN)
+    monkeypatch.setenv("CICD_SOURCE_BRANCH", "pr")
+    monkeypatch.setenv("CICD_TARGET_BRANCH", "main")
+    return pr_repo
+
+
+@pytest.fixture
+def push_boundary(monkeypatch):
+    """Run git for real except `git push`, which is recorded with its env."""
+    calls = []
+    real_git = git_semver.git
+    response = {"rc": 0, "stderr": "", "stdout": ""}
+
+    def _git(*a, check=True, capture=True, env=None):
+        if a[:1] == ("push",):
+            calls.append((a, env))
+            return subprocess.CompletedProcess(
+                ["git", *a], response["rc"], response["stdout"],
+                response["stderr"])
+        return real_git(*a, check=check, capture=capture, env=env)
+
+    monkeypatch.setattr(git_semver, "git", _git)
+    return calls, response
+
+
+def remote_sha(repo, branch):
+    bare = g(repo, "remote", "get-url", "origin")
+    return g(repo, "--git-dir", bare, "rev-parse", branch)
+
+
+class TestCheckBumpPush:
+    def test_pushes_to_source_branch(self, origin_pr, push_boundary, capsys):
+        calls, _ = push_boundary
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        sha = g(origin_pr, "rev-parse", "HEAD")
+        assert sha != remote_sha(origin_pr, "pr")
+        assert len(calls) == 1
+        argv, env = calls[0]
+        assert argv == ("push", "origin", "HEAD:refs/heads/pr")
+        assert FAKE_TOKEN not in " ".join(argv)
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_KEY_1"] == "http.https://github.com/.extraheader"
+        assert env["GIT_CONFIG_VALUE_1"] == f"AUTHORIZATION: basic {FAKE_BASIC}"
+        assert f"Pushed {sha} to pr" in out
+        assert f"The pushed commit {sha} starts its own run; wait for that one" in out
+
+    def test_bump_already_made_no_commit_no_push(self, origin_pr, push_boundary,
+                                                 capsys):
+        calls, _ = push_boundary
+        write(origin_pr, "VERSION", "1.3.0\n")
+        commit(origin_pr)
+        assert run_check(capsys, base="main")[0] == 0
+        assert calls == []
+
+    def _refused(self, capsys, push_boundary, reason, pushes=0, **kwargs):
+        calls, _ = push_boundary
+        rc, out = run_check(capsys, base="main", **kwargs)
+        assert rc == 1
+        assert len(calls) == pushes
+        assert f"Not pushing the bump: {reason}" in out
+        assert "  fix: run `git-semver bump patch --no-push` on the branch" in out
+        return out
+
+    def test_no_token(self, origin_pr, push_boundary, capsys, monkeypatch):
+        monkeypatch.delenv("CICD_WRITE_TOKEN")
+        self._refused(capsys, push_boundary,
+                      "no CICD_WRITE_TOKEN: declare it on the version check job")
+
+    def test_empty_token(self, origin_pr, push_boundary, capsys, monkeypatch):
+        monkeypatch.setenv("CICD_WRITE_TOKEN", "")
+        self._refused(capsys, push_boundary, "no CICD_WRITE_TOKEN")
+
+    def test_no_source_branch(self, origin_pr, push_boundary, capsys,
+                              monkeypatch):
+        monkeypatch.delenv("CICD_SOURCE_BRANCH")
+        self._refused(capsys, push_boundary, "source branch unknown")
+
+    def test_source_is_target(self, origin_pr, push_boundary, capsys,
+                              monkeypatch):
+        monkeypatch.setenv("CICD_TARGET_BRANCH", "pr")
+        self._refused(capsys, push_boundary,
+                      "source branch pr is the target branch")
+
+    @pytest.mark.parametrize("branch", ["main", "master"])
+    def test_source_is_release_branch(self, origin_pr, push_boundary, capsys,
+                                      monkeypatch, branch):
+        monkeypatch.setenv("CICD_SOURCE_BRANCH", branch)
+        monkeypatch.setenv("CICD_TARGET_BRANCH", "plan/x")
+        self._refused(capsys, push_boundary,
+                      f"source branch {branch} is a release branch")
+
+    def test_branch_not_on_origin(self, origin_pr, push_boundary, capsys,
+                                  monkeypatch):
+        monkeypatch.setenv("CICD_SOURCE_BRANCH", "from-a-fork")
+        self._refused(capsys, push_boundary,
+                      "branch from-a-fork is not on origin")
+
+    def test_branch_moved_on(self, origin_pr, push_boundary, capsys):
+        head = g(origin_pr, "rev-parse", "HEAD")
+        g(origin_pr, "checkout", "-q", "-b", "later")
+        write(origin_pr, "README.md", "later\n")
+        later = commit(origin_pr)
+        g(origin_pr, "push", "-q", "origin", "later:pr")
+        g(origin_pr, "checkout", "-q", "pr")
+        self._refused(capsys, push_boundary,
+                      f"branch pr moved on from {head} (now {later})")
+
+    def test_origin_unreadable(self, origin_pr, push_boundary, capsys):
+        g(origin_pr, "remote", "remove", "origin")
+        self._refused(capsys, push_boundary, "cannot read origin: ")
+
+    def test_push_fails_redacted(self, origin_pr, push_boundary, capsys):
+        _, response = push_boundary
+        response["rc"] = 1
+        response["stderr"] = (f"remote: denied for {FAKE_TOKEN}\n"
+                              f"header basic {FAKE_BASIC}\n")
+        out = self._refused(capsys, push_boundary,
+                            "git push failed: remote: denied for ***",
+                            pushes=1)
+        assert FAKE_TOKEN not in out and FAKE_BASIC not in out
+        assert "header basic ***" in out
+
+    def test_push_fails_stdout_only(self, origin_pr, push_boundary, capsys):
+        _, response = push_boundary
+        response["rc"] = 1
+        response["stdout"] = "rejected"
+        self._refused(capsys, push_boundary, "git push failed: rejected",
+                      pushes=1)
+
+    def test_subdir_fix_line(self, origin_pr, push_boundary, capsys,
+                             monkeypatch):
+        set_config(origin_pr, bump_on="pull_request",
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(origin_pr, "VERSION", "1.3.0\n")
+        write(origin_pr, "backend/VERSION", "0.1.0\n")
+        g(origin_pr, "checkout", "-q", "main")
+        commit(origin_pr, "backend")
+        g(origin_pr, "checkout", "-q", "pr")
+        g(origin_pr, "reset", "-q", "--hard", "main")
+        write(origin_pr, "backend/x.py", "b\n")
+        commit(origin_pr)
+        monkeypatch.delenv("CICD_WRITE_TOKEN")
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert "  fix: run `git-semver bump patch --no-push --subdir backend`" \
+            " on the branch and push the commit" in out
+
+    def test_args_override_env(self, origin_pr, push_boundary, capsys,
+                               monkeypatch):
+        calls, _ = push_boundary
+        monkeypatch.setenv("CICD_SOURCE_BRANCH", "main")
+        monkeypatch.setenv("CICD_TARGET_BRANCH", "pr")
+        rc, out = run_check(capsys, base="main", source_branch="pr",
+                            target_branch="main")
+        assert rc == 1
+        assert [c[0] for c in calls] == [("push", "origin", "HEAD:refs/heads/pr")]
+
+    def test_no_fix_pushes_nothing(self, origin_pr, push_boundary, capsys):
+        calls, _ = push_boundary
+        before = count(origin_pr)
+        rc, out = run_check(capsys, base="main", fix=False)
+        assert rc == 1
+        assert calls == [] and count(origin_pr) == before
+        assert "git-semver bump patch --no-push" in out
+
+    def test_real_push_leaks_no_token(self, origin_pr, capsys):
+        rc = git_semver.cmd_check_bump(args(base="main"))
+        captured = capsys.readouterr()
+        assert rc == 1
+        sha = g(origin_pr, "rev-parse", "HEAD")
+        assert remote_sha(origin_pr, "pr") == sha
+        assert f"Pushed {sha} to pr" in captured.out
+        text = captured.out + captured.err
+        text += g(origin_pr, "log", "-1", "--format=%B")
+        text += g(origin_pr, "config", "--list", "--show-origin")
+        text += (origin_pr / ".git" / "config").read_text()
+        for secret in (FAKE_TOKEN, FAKE_BASIC):
+            assert secret not in text
+        assert "extraheader" not in text
+
+
 class TestCheckBumpProcess:
     """Run as CI does, through the script's entry point."""
 
@@ -301,6 +714,30 @@ class TestCheckBumpProcess:
         commit(repo)
         result = self._run(repo, "--base", "main", "--head", "HEAD")
         assert result.returncode == 0, result.stderr
+
+    def test_fixing_mode_commits(self, pr_repo):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        result = self._run(pr_repo, "--base", "main", "--fix")
+        assert result.returncode == 1, result.stderr
+        assert "Raised root: 1.2.3 -> 1.2.4" in result.stdout
+        assert g(pr_repo, "log", "-1", "--format=%s") == \
+            "chore: bump version (root 1.2.3 -> 1.2.4)"
+
+    def test_fixing_mode_pushes(self, origin_pr):
+        result = self._run(origin_pr, "--base", "main", "--source-branch", "pr",
+                           "--target-branch", "main",
+                           env_extra={"CICD_WRITE_TOKEN": FAKE_TOKEN})
+        assert result.returncode == 1, result.stderr
+        sha = g(origin_pr, "rev-parse", "HEAD")
+        assert remote_sha(origin_pr, "pr") == sha
+        assert "starts its own run; wait for that one" in result.stdout
+        assert FAKE_TOKEN not in result.stdout + result.stderr
+
+    def test_fix_and_no_fix_exclusive(self, repo):
+        result = self._run(repo, "--base", "main", "--fix", "--no-fix")
+        assert result.returncode == 2
+        assert "not allowed with" in result.stderr
 
     def test_no_base_exits_1_on_stderr(self, repo):
         result = self._run(repo)
