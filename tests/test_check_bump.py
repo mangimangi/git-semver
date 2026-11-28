@@ -276,6 +276,220 @@ class TestCheckBumpInputs:
         assert g(repo, "rev-parse", "HEAD") == before_head
 
 
+def set_config(repo, **extra):
+    cfg = {"version_file": "VERSION", "files": ["src/**"]}
+    cfg.update(extra)
+    write(repo, CONFIG, json.dumps(cfg))
+
+
+@pytest.fixture
+def pr_repo(repo):
+    """`repo` with bump_on pull_request, an updates target and a changelog."""
+    set_config(repo, bump_on="pull_request",
+               updates={"pkg.py": ["__version__ = "]})
+    write(repo, "pkg.py", '__version__ = "1.2.3"\n')
+    write(repo, "CHANGELOG.md", "# Changelog\n\n## [1.2.3] - 2026-01-01\n")
+    g(repo, "checkout", "-q", "main")
+    commit(repo, "pull request mode")
+    g(repo, "checkout", "-q", "pr")
+    g(repo, "reset", "-q", "--hard", "main")
+    return repo
+
+
+def count(repo):
+    return int(g(repo, "rev-list", "--count", "HEAD"))
+
+
+class TestCheckBumpFix:
+    def test_unbumped_change_gets_one_patch_commit(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo, "feat: change app")
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert count(pr_repo) == before + 1
+        assert (pr_repo / "VERSION").read_text() == "1.2.4\n"
+        assert '__version__ = "1.2.4"' in (pr_repo / "pkg.py").read_text()
+        changelog = (pr_repo / "CHANGELOG.md").read_text()
+        assert "## [1.2.4]" in changelog
+        assert "feat: change app" in changelog
+        assert g(pr_repo, "log", "-1", "--format=%s") == \
+            "chore: bump version (root 1.2.3 -> 1.2.4)"
+        assert sorted(g(pr_repo, "show", "--name-only", "--format=",
+                        "HEAD").split()) == ["CHANGELOG.md", "VERSION", "pkg.py"]
+        assert "Raised root: 1.2.3 -> 1.2.4" in out
+        assert g(pr_repo, "rev-parse", "HEAD") in out
+        assert "git-semver bump patch --no-push" in out
+        assert g(pr_repo, "status", "--porcelain") == ""
+        # The fixed head now passes the check.
+        assert run_check(capsys, base="main")[0] == 0
+
+    def test_root_and_subdir_one_commit(self, pr_repo, capsys):
+        set_config(pr_repo, bump_on="pull_request",
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(pr_repo, "backend/VERSION", "0.3.0\n")
+        write(pr_repo, "backend/CHANGELOG.md", "# Changelog\n")
+        g(pr_repo, "checkout", "-q", "main")
+        commit(pr_repo, "add backend")
+        g(pr_repo, "checkout", "-q", "pr")
+        g(pr_repo, "reset", "-q", "--hard", "main")
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "backend/x.py", "b\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert count(pr_repo) == before + 1
+        assert g(pr_repo, "log", "-1", "--format=%s") == (
+            "chore: bump version (root 1.2.3 -> 1.2.4, backend 0.3.0 -> 0.3.1)")
+        assert (pr_repo / "backend/VERSION").read_text() == "0.3.1\n"
+        assert "## [0.3.1]" in (pr_repo / "backend/CHANGELOG.md").read_text()
+
+    def test_only_unbumped_component_raised(self, pr_repo, capsys):
+        set_config(pr_repo, bump_on="pull_request", changelog=False,
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(pr_repo, "backend/VERSION", "0.3.0\n")
+        g(pr_repo, "checkout", "-q", "main")
+        commit(pr_repo, "add backend")
+        g(pr_repo, "checkout", "-q", "pr")
+        g(pr_repo, "reset", "-q", "--hard", "main")
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "VERSION", "1.3.0\n")
+        write(pr_repo, "backend/x.py", "b\n")
+        commit(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert g(pr_repo, "log", "-1", "--format=%s") == \
+            "chore: bump version (backend 0.3.0 -> 0.3.1)"
+        assert (pr_repo / "VERSION").read_text() == "1.3.0\n"
+        assert g(pr_repo, "show", "--name-only", "--format=", "HEAD") == \
+            "backend/VERSION"
+
+    @pytest.mark.parametrize("new", ["1.2.4", "1.3.0", "2.0.0"])
+    def test_bump_already_made_no_commit(self, pr_repo, capsys, new):
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "VERSION", new + "\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, _ = run_check(capsys, base="main")
+        assert rc == 0
+        assert count(pr_repo) == before
+
+    @pytest.mark.parametrize("version", ["1.2.2\n", "1.3\n", None])
+    def test_down_malformed_missing_never_fixed(self, pr_repo, capsys, version):
+        set_config(pr_repo, bump_on="pull_request",
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(pr_repo, "backend/VERSION", "0.3.0\n")
+        g(pr_repo, "checkout", "-q", "main")
+        commit(pr_repo, "add backend")
+        g(pr_repo, "checkout", "-q", "pr")
+        g(pr_repo, "reset", "-q", "--hard", "main")
+        write(pr_repo, "src/app.py", "b\n")
+        write(pr_repo, "backend/x.py", "b\n")  # fixable on its own
+        if version is None:
+            (pr_repo / "VERSION").unlink()
+        else:
+            write(pr_repo, "VERSION", version)
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert count(pr_repo) == before
+        assert "root: FAIL" in out
+        assert "Not fixing: the version of root" in out
+        assert g(pr_repo, "status", "--porcelain") == ""
+
+    def test_nothing_changed_no_commit(self, pr_repo, capsys):
+        write(pr_repo, "README.md", "x\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        assert run_check(capsys, base="main")[0] == 0
+        assert count(pr_repo) == before
+
+    def test_no_fix_overrides_pull_request(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        rc, out = run_check(capsys, base="main", fix=False)
+        assert rc == 1
+        assert count(pr_repo) == before
+        assert "VERSION is still 1.2.3" in out
+        assert "Raised" not in out
+
+    def test_push_bump_false_checks_only(self, pr_repo, capsys):
+        set_config(pr_repo, bump_on="pull_request", push_bump=False)
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        before = count(pr_repo)
+        assert run_check(capsys, base="main")[0] == 1
+        assert count(pr_repo) == before
+
+    def test_merge_mode_default_checks_only(self, repo, capsys):
+        set_config(repo, push_bump=True)
+        write(repo, "src/app.py", "b\n")
+        commit(repo)
+        before = count(repo)
+        assert run_check(capsys, base="main")[0] == 1
+        assert count(repo) == before
+
+    def test_fix_overrides_merge_mode(self, repo, capsys):
+        write(repo, "src/app.py", "b\n")
+        commit(repo)
+        before = count(repo)
+        rc, out = run_check(capsys, base="main", fix=True)
+        assert rc == 1
+        assert count(repo) == before + 1
+        assert (repo / "VERSION").read_text() == "1.2.4\n"
+
+    def test_head_not_checked_out_errors(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        bad = commit(pr_repo)
+        write(pr_repo, "README.md", "later\n")
+        commit(pr_repo)
+        with pytest.raises(git_semver.SemverError,
+                           match=f"head is {bad}, HEAD is "):
+            git_semver.cmd_check_bump(args(base="main", head=bad))
+
+    def test_unrelated_worktree_changes_not_committed(self, pr_repo, capsys):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        write(pr_repo, "README.md", "dirty\n")
+        write(pr_repo, "untracked.txt", "x\n")
+        run_check(capsys, base="main")
+        files = g(pr_repo, "show", "--name-only", "--format=", "HEAD").split()
+        assert "README.md" not in files and "untracked.txt" not in files
+        status = g(pr_repo, "status", "--porcelain")
+        assert "README.md" in status and "untracked.txt" in status
+
+    def test_tag_ahead_baseline_still_above_base(self, pr_repo, capsys):
+        g(pr_repo, "tag", "v1.2.7")
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        run_check(capsys, base="main")
+        assert (pr_repo / "VERSION").read_text() == "1.2.8\n"
+
+    def test_configured_identity_is_used(self, pr_repo, capsys):
+        g(pr_repo, "config", "user.name", "Someone")
+        g(pr_repo, "config", "user.email", "someone@example.com")
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        run_check(capsys, base="main")
+        assert g(pr_repo, "log", "-1", "--format=%ae") == "someone@example.com"
+
+    def test_fallback_identity_without_config(self, pr_repo, capsys,
+                                              monkeypatch):
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        run_check(capsys, base="main")
+        assert g(pr_repo, "log", "-1", "--format=%ae") == \
+            "git-semver@users.noreply.github.com"
+
+
 class TestCheckBumpProcess:
     """Run as CI does, through the script's entry point."""
 
@@ -301,6 +515,20 @@ class TestCheckBumpProcess:
         commit(repo)
         result = self._run(repo, "--base", "main", "--head", "HEAD")
         assert result.returncode == 0, result.stderr
+
+    def test_fixing_mode_commits(self, pr_repo):
+        write(pr_repo, "src/app.py", "b\n")
+        commit(pr_repo)
+        result = self._run(pr_repo, "--base", "main", "--fix")
+        assert result.returncode == 1, result.stderr
+        assert "Raised root: 1.2.3 -> 1.2.4" in result.stdout
+        assert g(pr_repo, "log", "-1", "--format=%s") == \
+            "chore: bump version (root 1.2.3 -> 1.2.4)"
+
+    def test_fix_and_no_fix_exclusive(self, repo):
+        result = self._run(repo, "--base", "main", "--fix", "--no-fix")
+        assert result.returncode == 2
+        assert "not allowed with" in result.stderr
 
     def test_no_base_exits_1_on_stderr(self, repo):
         result = self._run(repo)
