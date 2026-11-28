@@ -519,6 +519,17 @@ class TestBumpComponent:
 # ── cmd_tag ─────────────────────────────────────────────────────────────────
 
 class TestCmdTag:
+    def test_no_version_files_tags_nothing(self, make_config, mock_git, capsys):
+        path = make_config({
+            "files": [], "updates": {},
+            "frontend": {"version_file": "frontend/VERSION"},
+        })
+
+        git_semver.cmd_tag(make_args(config=path))
+        assert "No version files found" in capsys.readouterr().out
+        calls, _ = mock_git
+        assert calls == []
+
     def test_tags_root_version(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
             "files": [], "updates": {},

@@ -937,3 +937,39 @@ class TestAutoTrigger:
             auto()
         assert exc.value.code != 0
         assert "'pull_request'" in capsys.readouterr().err
+
+
+# ── run (the real subprocess wrapper) ───────────────────────────────────────
+
+class TestRun:
+    def test_returns_captured_result(self):
+        result = bar.run(sys.executable, "-c", "print('hi')")
+        assert result.returncode == 0
+        assert result.stdout == "hi\n"
+
+    def test_failure_exits_1_naming_command_and_stderr(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            bar.run(sys.executable, "-c",
+                    "import sys; sys.stderr.write('boom\\n'); sys.exit(3)")
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert f"Command failed: {sys.executable} -c" in err
+        assert "boom" in err
+
+    def test_failure_with_empty_stderr_names_only_command(self, capsys):
+        with pytest.raises(SystemExit):
+            bar.run(sys.executable, "-c", "import sys; sys.exit(2)")
+        err = capsys.readouterr().err
+        assert err.startswith("Command failed: ")
+        assert err.count("\n") == 1
+
+    def test_check_false_returns_failure(self):
+        result = bar.run(sys.executable, "-c", "import sys; sys.exit(4)",
+                         check=False)
+        assert result.returncode == 4
+
+    def test_uncaptured_failure_prints_no_stderr(self, capfd):
+        with pytest.raises(SystemExit):
+            bar.run(sys.executable, "-c", "import sys; sys.exit(5)",
+                    capture=False)
+        assert capfd.readouterr().err.startswith("Command failed: ")
