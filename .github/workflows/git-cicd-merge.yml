@@ -6,28 +6,35 @@
 # event, permissions and overlap rule:
 #
 #   open    Open    .github/workflows/git-cicd-open.yml    (generated)
-#   merge   Merge   .github/workflows/git-cicd-merge.yml   (generated)
+#   merge   Merge   .github/workflows/git-cicd-merge.yml   (generated when a job has merge in on)
 #   cron    Cron    .github/workflows/git-cicd-cron.yml    (generated when a job has cron in on)
 #   manual  Manual  .github/workflows/git-cicd-manual.yml  (generated)
 #
 # Every generated file is fixed text except the cron workflow's schedule
-# block, the manual workflow's form and, in every workflow, the run job of
-# each permission group (below) with the decide output and the report's
-# `needs` that go with it; without a permission declaration beyond the
-# default this file does not vary with the config at all, only with the
-# git-cicd version (and the tool path, which is where git-cicd is installed).
+# block, the manual workflow's form, this workflow's `branches` (below) and,
+# in every workflow, the run job of each permission group (below) with the
+# decide output and the report's `needs` that go with it; without a
+# permission declaration beyond the default this file varies with the config
+# only in its `branches`, and otherwise only with the git-cicd version (and
+# the tool path, which is where git-cicd is installed).
 # Whoever upgrades git-cicd, or changes the config, runs
 #   .vendored/pkg/git-cicd/git-cicd generate
 # and commits what it writes in the same pull request. CI regenerates the
 # files, compares them whole and fails the verdict when they differ.
 #
-# Event: a push to any branch (no tags). Which branches a job runs for is the
-# config's `branches`, decided by the tool against the branch the push landed
-# on. A push that deletes a branch runs nothing: there is no commit to run on
-# or to put a status on. The changed files are what the push brought
-# (`github.event.before`...`github.sha`); a push that created its branch has
-# an all-zero `before`, and the tool then needs every merge job whose
-# branches match.
+# Event: a push (no tags) to a branch some merge job names: `branches` is the
+# union, in config order and without duplicates, of the `branches` of every
+# job whose `on` includes `merge`, each a quoted string. When one of those
+# patterns means something else in a GitHub branch filter (`?`, `+`, `[`,
+# `]`, `!`, `\`, a `**/` segment or `***`), the trigger is `['**']`, a push
+# to any branch, and generate says so. Without a merge job this file is not
+# generated. Which jobs a push needs is still decided by the tool, per job,
+# against the branch the push landed on: a push the trigger lets through that
+# no job matches still reports `Nothing needed`. A push that deletes a branch
+# runs nothing: there is no commit to run on or to put a status on. The
+# changed files are what the push brought (`github.event.before`...
+# `github.sha`); a push that created its branch has an all-zero `before`,
+# and the tool then needs every merge job whose branches match.
 #
 # Permissions: `contents: read` at the top level. The job that runs the
 # config's scripts gets `contents: write` and `pull-requests: write` (a
@@ -91,7 +98,7 @@ name: Merge
 
 on:
   push:
-    branches: ['**']
+    branches: ['main']
 
 permissions:
   contents: read

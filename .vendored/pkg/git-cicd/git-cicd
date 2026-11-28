@@ -55,7 +55,11 @@ VERDICT_STATUS = "Verdict / git-cicd:verdict"
 TRIGGERS = ("open", "merge", "cron")
 DEFAULT_MAX_PARALLEL = 3
 
-TOP_LEVEL_FIELDS = ("_vendor", "jobs", "needs_nothing", "max_parallel")
+TOP_LEVEL_FIELDS = ("_vendor", "jobs", "needs_nothing", "max_parallel",
+                    "repository")
+# The repository name a config may set (`repository`): GitHub's own
+# characters for a repository name.
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 JOB_FIELDS = ("name", "on", "branches", "paths", "setup", "steps", "cron", "manual",
               "blocking", "inputs", "secrets", "permissions")
 # The secrets a job may declare. A script's environment holds one of them if
@@ -437,6 +441,13 @@ def _validate_job(root, name, job):
                       "is empty)")
     elif any(b == "" for b in branches):
         errors.append(f"{prefix}: branches contains an empty pattern")
+    elif "merge" in on:
+        for b in branches:
+            if EXPRESSION_MARK in b or not all(ch.isprintable() for ch in b):
+                errors.append(f"{prefix}: branches pattern {b!r} contains "
+                              f"{EXPRESSION_MARK} or a control character, "
+                              "which cannot be written into the Merge "
+                              "workflow's trigger")
 
     # cron
     has_cron = "cron" in on
@@ -655,6 +666,15 @@ def validate_config(data, root):
         errors.append("config: max_parallel must be a positive integer")
         max_parallel = DEFAULT_MAX_PARALLEL
 
+    repository = data.get("repository")
+    if "repository" in data and not (
+            isinstance(repository, str) and REPOSITORY_RE.match(repository)
+            and repository not in (".", "..")):
+        errors.append("config: repository must be the repository's name "
+                      "(letters, digits, ., - and _; for example git-cicd), "
+                      "as rows show it in <name> / <repo>:<job>")
+        repository = None
+
     errors.extend(_validate_manual_form(jobs))
 
     if errors:
@@ -663,6 +683,7 @@ def validate_config(data, root):
         "jobs": jobs,
         "needs_nothing": list(needs_nothing),
         "max_parallel": max_parallel,
+        "repository": repository,
     }
 
 
@@ -696,6 +717,12 @@ def _validate_manual_form(jobs):
     errors = []
     manual = {n: j for n, j in jobs.items() if j["manual"]}
     for name, job in manual.items():
+        if EXPRESSION_MARK in job["title"]:
+            errors.append(f"job {name}: the name contains {EXPRESSION_MARK}, "
+                          "which GitHub would evaluate in the Manual "
+                          "workflow's job dropdown; remove "
+                          f"{EXPRESSION_MARK}, or set \"manual\": false on "
+                          "the job")
         for key, decl in (job.get("inputs") or {}).items():
             texts = [("description", decl["description"]),
                      ("default", decl["default"] or "")]
@@ -955,6 +982,7 @@ def decide(config, root, trigger, target, source, base, head, files=None,
     reason. Return the decision record (what `decide --json` prints)."""
     check_trigger(config, trigger)
     if trigger == "manual":
+        job = manual_job_key(config, repo_name(root, config), job)
         return decide_manual(config, target, source, base, head, job)
     if trigger == "cron":
         return decide_cron(config, root, cron)
@@ -1181,6 +1209,8 @@ def run_job(config, root, name, facts, setup=False, files=None):
     """Run a job: setup when asked, then each step in order, stopping at the
     first failing step. Return the result record."""
     check_trigger(config, facts["trigger"])
+    if facts["trigger"] == "manual":
+        name = manual_job_key(config, repo_name(root, config), name)
     job = config["jobs"].get(name)
     if job is None:
         raise UsageError(f"unknown job {name!r} (declared: "
@@ -1294,18 +1324,100 @@ def schedule_block(config):
     return "\n".join(lines) + "\n"
 
 
+# The characters a GitHub branch filter reads specially and the config's
+# patterns take literally (`?` is one character in the config, "zero or one
+# of the preceding character" on GitHub); a pattern holding one cannot be
+# passed through. GitHub's filter pattern syntax:
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#filter-pattern-cheat-sheet
+FILTER_SPECIAL = ("?", "+", "[", "]", "!", "\\")
+ANY_BRANCH = "**"
+
+
+def filter_pattern_ok(pattern):
+    """True when a config branches pattern means the same as a GitHub branch
+    filter pattern, so the Merge workflow's trigger can name it as it is.
+    Both read `*` as any characters but `/` and `**` as any characters; the
+    config's `**/` at the start of a segment may also match no directory at
+    all, which GitHub's cannot, and `***` is left to neither. Everything else
+    must be literal to both."""
+    if any(ch in pattern for ch in FILTER_SPECIAL) or "***" in pattern:
+        return False
+    return not re.search(r"(?:^|/)\*\*/", pattern)
+
+
+def merge_branches(config):
+    """The Merge workflow's push `branches`: the union, in config order and
+    without duplicates, of the branches of every job whose on includes
+    merge. Return (patterns, refused): when a pattern cannot be passed
+    through (filter_pattern_ok), patterns is [ANY_BRANCH] and refused is
+    (job, pattern) for the first such one, else refused is None."""
+    patterns = []
+    for name, job in config["jobs"].items():
+        if "merge" not in job["on"]:
+            continue
+        for b in job["branches"]:
+            if not filter_pattern_ok(b):
+                return [ANY_BRANCH], (name, b)
+            if b not in patterns:
+                patterns.append(b)
+    return patterns, None
+
+
+def _yaml_single(text):
+    return "'" + text.replace("'", "''") + "'"
+
+
+def branches_block(config):
+    """The Merge trigger's branches as a YAML flow sequence of single-quoted
+    strings, from validated patterns (no `${{`, no control character)."""
+    patterns, _ = merge_branches(config)
+    return "[" + ", ".join(_yaml_single(p) for p in patterns) + "]"
+
+
+def branches_note(config):
+    """generate's one line when the Merge trigger falls back to any branch,
+    else None."""
+    _, refused = merge_branches(config)
+    if refused is None:
+        return None
+    name, pattern = refused
+    return (f"note: the Merge workflow starts on a push to any branch "
+            f"('{ANY_BRANCH}'): pattern {pattern!r} of job {name} means "
+            "something else in a GitHub branch filter; the tool still "
+            "decides each job against the branch")
+
+
 def manual_job_names(config):
     return [n for n, j in config["jobs"].items() if j["manual"]]
 
 
-def _used_by(users):
-    return f"(job{'s' if len(users) > 1 else ''} {', '.join(users)})"
+def job_row(config, repo, name):
+    """The row name of a config job, `<name> / <repo>:<job>`: what a pull
+    request's checks, the report and the Manual form's dropdown show."""
+    job = config["jobs"][name]
+    return row_name(job.get("title") or default_title(name), repo, name)
 
 
-def form_block(config):
+def _used_by(config, repo, users):
+    return f"({', '.join(job_row(config, repo, u) for u in users)})"
+
+
+def manual_job_key(config, repo, value):
+    """The config job a manual run names: the bare config key, or the row
+    name the Manual form's dropdown shows for a job that allows manual runs.
+    Anything else comes back unchanged, so the refusal names it."""
+    if value in config["jobs"]:
+        return value
+    for name in manual_job_names(config):
+        if job_row(config, repo, name) == value:
+            return name
+    return value
+
+
+def form_block(config, repo):
     """The Manual workflow's form, the `inputs:` entries of its
     `workflow_dispatch`: `job`, a dropdown of the jobs that allow manual runs
-    in config order, then one field per distinct declared input of those
+    in config order, each shown by its row name (job_row), then one field per distinct declared input of those
     jobs, in first-seen order. Every field but `job` is optional in the form,
     since the form shows every job's fields; the tool enforces `required` for
     the chosen job. Names are validated identifiers, written bare; every
@@ -1319,12 +1431,13 @@ def form_block(config):
              "        required: true",
              "        type: choice",
              "        options:"]
-    lines += [f"          - {json.dumps(n)}" for n in names]
+    lines += [f"          - {json.dumps(job_row(config, repo, n))}"
+              for n in names]
     for key, decl, users in manual_form_fields(config["jobs"]):
         description = decl["description"]
         if len(users) < len(names):
-            description = " ".join(p for p in (description, _used_by(users))
-                                   if p)
+            description = " ".join(
+                p for p in (description, _used_by(config, repo, users)) if p)
         lines += [f"      {key}:",
                   f"        description: {json.dumps(description)}",
                   "        required: false"]
@@ -1379,16 +1492,19 @@ def group_jobs_block(config, template, trigger):
     return "\n" + "\n".join(blocks)
 
 
-def render_workflow(config, tool, template, trigger=None):
+def render_workflow(config, tool, template, trigger=None, repo=None):
     """One workflow file from its template, deterministic byte for byte. A
     template is fixed text; the only parts that depend on the config are the
     schedule block, which only the cron template holds (`__SCHEDULE__`), the
-    form, which only the manual template holds (`__FORM__`), and the run job
+    form, which only the manual template holds (`__FORM__`), the push
+    branches, which only the merge template holds (`__BRANCHES__`,
+    branches_block), and the run job
     of each permission group with the decide output and the report's needs
     that go with them (`__GROUP_OUTPUTS__`, `__GROUP_JOBS__`,
     `__GROUP_NEEDS__`), empty when no job declares permissions beyond its
     trigger's default. The tool path depends on where the tool is
-    installed."""
+    installed, the form on the repository's name (repo_name; without one,
+    the config's `repository`, else `repository`)."""
     trigger = trigger or template_trigger(template)
     groups = permission_groups(config, trigger) if trigger in \
         TRIGGER_PERMISSIONS else {}
@@ -1398,8 +1514,11 @@ def render_workflow(config, tool, template, trigger=None):
                         "outputs.groups }}\n" if groups else "")
     text = text.replace(GROUP_NEEDS, "".join(f", {g}" for g in groups))
     text = text.replace("__SCHEDULE__\n", schedule_block(config))
+    if "__BRANCHES__" in template:
+        text = text.replace("__BRANCHES__", branches_block(config))
     if "__FORM__\n" in template:
-        text = text.replace("__FORM__\n", form_block(config))
+        repo = repo or config.get("repository") or "repository"
+        text = text.replace("__FORM__\n", form_block(config, repo))
     return text.replace("__TOOL__", tool)
 
 
@@ -1411,8 +1530,13 @@ def has_manual_jobs(config):
     return bool(manual_job_names(config))
 
 
+def has_merge_jobs(config):
+    return any("merge" in j["on"] for j in config["jobs"].values())
+
+
 # Why a trigger's workflow is not generated, for generate and verify.
 NOT_GENERATED = {
+    "merge": "no job has merge in on",
     "cron": "no job has cron in on",
     "manual": "no job allows manual runs",
 }
@@ -1420,33 +1544,41 @@ NOT_GENERATED = {
 
 def rendered_triggers(config):
     """The triggers whose workflow the config generates: every one, except
-    cron when no job has cron in on (GitHub needs an event under on:, and a
+    merge when no job has merge in on (a push must not start a run that can
+    never need anything), cron when no job has cron in on (GitHub needs an event under on:, and a
     schedule must never fire with nothing to run), and manual when no job
     allows manual runs (the form's `job` dropdown needs an option, and a
     workflow with nothing to run must not exist)."""
-    present = {"cron": has_cron_jobs(config),
+    present = {"merge": has_merge_jobs(config),
+               "cron": has_cron_jobs(config),
                "manual": has_manual_jobs(config)}
     return [t for t in GENERATED_TRIGGERS if present.get(t, True)]
 
 
 def stale_triggers(config):
     """The triggers whose workflow the config no longer generates (generate
-    removes their files, verify fails while one is there): cron when no job
-    has cron in on, manual when no job allows manual runs."""
+    removes their files, verify fails while one is there): merge when no job
+    has merge in on, cron when no job has cron in on, manual when no job allows manual runs."""
     return [t for t in GENERATED_TRIGGERS
             if t not in rendered_triggers(config)]
 
 
-def render_workflows(config, tool, templates=None):
+def render_workflows(config, tool, templates=None, repo=None):
     """{path: text} for every workflow the config generates, in trigger
     order."""
+    if repo is not None and (EXPRESSION_MARK in repo or not all(
+            ch.isprintable() for ch in repo)):
+        raise UsageError(f"the repository's name {repo!r} cannot be written "
+                         "into a workflow (it holds a control character or "
+                         f"{EXPRESSION_MARK}); set \"repository\" in the "
+                         "config to the repository's name")
     out = {}
     for trigger in rendered_triggers(config):
         template = (templates or {}).get(trigger)
         if template is None:
             template = template_text(trigger)
         out[WORKFLOWS[trigger][1]] = render_workflow(config, tool, template,
-                                                     trigger)
+                                                     trigger, repo)
     return out
 
 
@@ -1465,8 +1597,10 @@ def verify_workflow(config, root, tool=None):
     Return (ok, message); message holds a unified diff per file that differs
     and the command to run when anything does not match."""
     tool = tool or tool_path(root)
+    repo, source = repo_identity(root, config)
+    rendered = render_workflows(config, tool, repo=repo)
     problems = []
-    for rel, expected in render_workflows(config, tool).items():
+    for rel, expected in rendered.items():
         try:
             with open(os.path.join(root, rel), encoding="utf-8",
                       newline="") as f:
@@ -1477,13 +1611,24 @@ def verify_workflow(config, root, tool=None):
             continue
         if actual is None:
             problems.append(f"{rel} is missing\n")
+            continue
+        other = _committed_repo(config, actual, repo)
+        if other is not None and render_workflows(
+                config, tool, repo=other).get(rel) == actual:
+            problems.append(
+                f"{rel} differs only in the repository's name: it was "
+                f"generated for {other!r}, and this checkout's name is "
+                f"{repo!r} ({source}). The name never comes from the "
+                "environment; when the file is right, set \"repository\": "
+                f"{json.dumps(other)} in the config, otherwise run "
+                f"{generate_command(tool)} and commit {rel}\n")
         else:
             problems.append("".join(difflib.unified_diff(
                 actual.splitlines(keepends=True),
                 expected.splitlines(keepends=True),
                 fromfile=f"{rel} (committed)",
                 tofile=f"{rel} (generated from the config)")))
-    commit = ", ".join(render_workflows(config, tool))
+    commit = ", ".join(rendered)
     removals = []
     for trigger in stale_triggers(config):
         rel = WORKFLOWS[trigger][1]
@@ -1549,24 +1694,53 @@ VENDOR_PKG_PREFIX = ".vendored/pkg/"
 VENDOR_VERSION_PATH = ".vendored/manifests/{vendor}.version"
 
 
-def repo_name(root):
-    """The name of the repository the checks run in.
-
-    In Actions, the name part of GITHUB_REPOSITORY (the platform's own fact).
-    Locally, the last path segment of the `origin` remote's URL without
-    `.git`; with no such remote, the name of the checkout's top-level
-    directory."""
-    gh = os.environ.get("GITHUB_REPOSITORY", "").strip()
-    if gh:
-        return gh.rstrip("/").rsplit("/", 1)[-1]
+def repo_identity(root, config=None):
+    """(name, where it came from) of the repository: the config's
+    `repository` when set; else the last path segment of the `origin`
+    remote's URL without `.git`; else the name of the checkout's top-level
+    directory. No environment variable is read, so every machine resolves
+    the same name for the same checkout, and generate, verify, decide,
+    run-job and the report agree."""
+    if config and config.get("repository"):
+        return config["repository"], "the config's repository"
     url = _git_out(root, "config", "--get", "remote.origin.url")
     if url:
         name = re.split(r"[/:]", url.rstrip("/"))[-1]
         if name.endswith(".git"):
             name = name[:-len(".git")]
         if name:
-            return name
-    return os.path.basename(os.path.abspath(root)) or "repository"
+            return name, "the origin remote's URL"
+    return (os.path.basename(os.path.abspath(root)) or "repository",
+            "the checkout's directory name")
+
+
+def repo_name(root, config=None):
+    """The name of the repository, as rows show it (repo_identity)."""
+    return repo_identity(root, config)[0]
+
+
+def _committed_repo(config, text, repo):
+    """The repository name a committed Manual workflow was generated for,
+    read from its first `job` option, when it is not `repo`; else None."""
+    names = manual_job_names(config)
+    if not names:
+        return None
+    first = names[0]
+    title = config["jobs"][first].get("title") or default_title(first)
+    prefix, suffix = f"{title} / ", f":{first}"
+    for line in text.splitlines():
+        m = re.fullmatch(r"          - (\".*\")", line)
+        if not m:
+            continue
+        try:
+            value = json.loads(m.group(1))
+        except ValueError:
+            continue
+        if value.startswith(prefix) and value.endswith(suffix):
+            other = value[len(prefix):-len(suffix)]
+            if other and other != repo:
+                return other
+    return None
 
 
 def _read_version(root, rel):
@@ -1653,7 +1827,8 @@ def short_head(root, head):
 
 def job_rows(config, decision, results, root=None, repo=None):
     """One row per declared job, in config order."""
-    repo = repo or (repo_name(root) if root is not None else "repository")
+    repo = repo or (repo_name(root, config) if root is not None
+                    else config.get("repository") or "repository")
     by_name = {j["name"]: j for j in (decision or {}).get("jobs", [])}
     rows = []
     for name, job in config["jobs"].items():
@@ -1871,7 +2046,7 @@ def report_cron(config, root, decision, result_list, workflow_ok, out):
     then the run's verdict. Return (passed, verdict line, verdicts), the
     verdicts being (sha, passed, verdict line) per branch head."""
     workflow_text = _workflow_text(root, workflow_ok)
-    repo = repo_name(root)
+    repo = repo_name(root, config)
     heads = decision.get("heads") or {}
     verdicts = []
     failed = []
@@ -1925,7 +2100,7 @@ def report(config, root, decision, results, workflow=None, setup_note=False,
         workflow = verify_workflow(config, root)
     workflow_ok = workflow[0]
     workflow_text = _workflow_text(root, workflow_ok)
-    repo = repo_name(root)
+    repo = repo_name(root, config)
     rows = job_rows(config, decision, results, root=root, repo=repo)
     passed, verdict = verdict_line(rows, decision, workflow_ok)
     header = header_text(repo, short_head(root, (decision or {}).get("head")))
@@ -2080,7 +2255,7 @@ def cmd_run_job(args, root):
     config = load_config(root, args.config)
     result = run_job(config, root, args.job, facts_from_args(args),
                      setup=args.setup)
-    line = f"==> git-cicd: job {args.job}: {result['state']}"
+    line = f"==> git-cicd: job {result['job']}: {result['state']}"
     if result["state"] == "failed":
         line += f" (step {result['failed_step']}, exit {result['exit_code']})"
     print(f"{line} in {result['seconds']:.1f}s", flush=True)
@@ -2093,12 +2268,15 @@ def cmd_run_job(args, root):
 
 def cmd_generate(args, root):
     config = load_config(root, args.config)
-    for rel, text in render_workflows(config, tool_path(root)).items():
+    for rel, text in render_workflows(config, tool_path(root),
+                                      repo=repo_name(root, config)).items():
         path = os.path.join(root, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         print(f"wrote {rel}")
+        if rel == WORKFLOWS["merge"][1] and branches_note(config):
+            print(branches_note(config))
     for trigger in stale_triggers(config):
         rel = WORKFLOWS[trigger][1]
         if os.path.lexists(os.path.join(root, rel)):
