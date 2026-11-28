@@ -36,6 +36,29 @@
           "default": ""
         }
       }
+    },
+    "update-vendored": {
+      "name": "Install Vendored",
+      "on": ["cron"],
+      "cron": "0 9 * * 1",
+      "branches": ["main"],
+      "paths": ["**"],
+      "steps": ["ci/update-vendored.sh"],
+      "inputs": {
+        "vendor": {
+          "description": "Vendor to update (or all)",
+          "default": "all"
+        },
+        "version": {
+          "description": "Version to install (default: latest)",
+          "default": "latest"
+        },
+        "private": {
+          "description": "Vendor repo is private (use VENDOR_PAT)",
+          "choices": ["true", "false"],
+          "default": "false"
+        }
+      }
     }
   },
   "needs_nothing": [

@@ -8,9 +8,17 @@ dynamic = ["version"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+# Line coverage of the two shipped Python scripts, by name. `patch =
+# ["subprocess"]` (coverage 7.10+) also measures a script a test starts as a
+# subprocess; each process writes its own data file, which ci/test.sh combines.
+# ci/test.sh fails when the total or either file is below fail_under.
 [tool.coverage.run]
-include = ["git-semver"]
+include = ["git-semver", "release"]
+patch = ["subprocess"]
+parallel = true
 
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+fail_under = 99
+precision = 1
