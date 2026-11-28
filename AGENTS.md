@@ -50,7 +50,11 @@ To run only the tests: `ci/test.sh` (after `git-cicd check --setup`), or `covera
 
 ## Vendor Infrastructure
 
+<<<<<<< HEAD
 This repo dogfoods its own tooling: its checks and its release are git-cicd jobs (`.vendored/configs/git-cicd.json`), and the `vendor-check` job blocks unauthorized edits to vendored files on PRs. `version-bump.yml`, `check-vendor.yml` and `dogfood.yml` are removed here; git-dogfood is retired. Vendored tools are updated by the git-cicd `update-vendored` job (`ci/update-vendored.sh`): every Monday at 09:00 UTC on `main`, or by hand from the Actions tab → **Manual** → run on `main` with `job` = `update-vendored` and `inputs` = e.g. `{"vendor": "all", "version": "latest", "private": "false"}`. Sessions never run it or `.vendored/install` themselves.
+=======
+This repo dogfoods its own tooling: its checks and its release are git-cicd jobs (`.vendored/configs/git-cicd.json`), and the `vendor-check` job blocks unauthorized edits to vendored files on PRs. `version-bump.yml`, `check-vendor.yml` and `dogfood.yml` are removed here; git-dogfood is retired. Vendored tools are updated by running `install-vendored.yml` from the Actions tab.
+>>>>>>> c18f9c9ed35300a6d82ccce4745e4834f86e1ecb
 
 ## Issue Tracking
 
