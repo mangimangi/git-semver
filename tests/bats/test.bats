@@ -9,7 +9,7 @@ load helpers
 venv_python() {
     stub "$1" '
 case "$*" in
-    --version) echo "Python 3.10.99" ;;
+    --version) echo "Python 3.11.99" ;;
     "-m coverage run -m pytest tests/ -v") [ -z "${FAIL_PYTEST:-}" ] || exit 1 ;;
     "-m coverage report --fail-under=99") [ -z "${FAIL_TOTAL:-}" ] || exit 2 ;;
     "-m coverage report --include="*)
@@ -26,8 +26,8 @@ exit 0'
 
 setup() {
     sandbox
-    write_pyproject 3.10
-    VENV="$XDG_CACHE_HOME/git-semver-ci/venv-3.10"
+    write_pyproject 3.11
+    VENV="$XDG_CACHE_HOME/git-semver-ci/venv-3.11"
     venv_python "$VENV/bin/python"
     stub "$VENV/bin/bats" '[ -z "${FAIL_BATS:-}" ] || exit 1'
 }

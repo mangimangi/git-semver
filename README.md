@@ -1,6 +1,6 @@
 # git-semver
 
-Config-driven semantic versioning for git repos. Declare which files matter, get automatic patch bumps on merge. Zero dependencies beyond Python 3 and git.
+Config-driven semantic versioning for git repos. Declare which files matter, get automatic patch bumps on merge. Zero dependencies beyond Python 3.11 or newer and git.
 
 ## Features
 
@@ -13,7 +13,7 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 - **Protected branch support** — auto-detects branch protection and falls back to PR mode
 - **Changelog generation** — from commit messages, with configurable noise filters
 - **No PAT required** — core versioning uses `GITHUB_TOKEN`
-- **CI-agnostic core** — the script works anywhere git and Python 3 are available
+- **CI-agnostic core** — the script works anywhere git and Python are available
 
 ## Installation
 
@@ -665,7 +665,7 @@ Workflows rely on commit message prefixes for loop prevention:
 
 | | git-semver | semantic-release | release-please |
 |-|-----------|-----------------|----------------|
-| Dependencies | Python 3 + git | Node.js ecosystem | GitHub-only service |
+| Dependencies | Python + git | Node.js ecosystem | GitHub-only service |
 | Config model | File patterns trigger bump | Commit conventions trigger bump | Commit conventions trigger bump |
 | Commit format | Any (doesn't parse commits) | Conventional Commits required | Conventional Commits required |
 | Changelog | Optional, from commit messages | Plugin-based | Automatic |

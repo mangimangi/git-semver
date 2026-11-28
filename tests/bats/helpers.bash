@@ -80,10 +80,10 @@ not_logged() {
     fi
 }
 
-# write_pyproject [FLOOR] - a pyproject.toml naming FLOOR (default 3.10) as
+# write_pyproject [FLOOR] - a pyproject.toml naming FLOOR (default 3.11) as
 # the requires-python floor; with FLOOR "none", one without requires-python.
 write_pyproject() {
-    local floor="${1:-3.10}"
+    local floor="${1:-3.11}"
     if [ "$floor" = none ]; then
         printf '[project]\nname = "x"\n' > pyproject.toml
     else

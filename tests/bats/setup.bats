@@ -14,7 +14,7 @@ if [ "$1" = -m ] && [ "$2" = venv ]; then
     mkdir -p "$dir/bin"
     cp "$STUBS/.fakepy" "$dir/bin/python"
 fi
-if [ "$1" = --version ]; then echo "Python 3.10.99"; fi
+if [ "$1" = --version ]; then echo "Python 3.11.99"; fi
 if [ "$1" = -m ] && [ "$2" = pip ] && [ "${@: -1}" = uv ]; then
     cp "$STUBS/.fakeuv" "$(dirname "$0")/uv"
 fi
@@ -23,7 +23,7 @@ exit 0'
 
 setup() {
     sandbox
-    write_pyproject 3.10
+    write_pyproject 3.11
     fake_python "$STUBS/.fakepy"
     stub "$STUBS/.fakeuv" '
 if [ "$1 $2" = "python find" ]; then echo "$STUBS/.uvpython"; fi
@@ -31,7 +31,7 @@ exit 0'
     fake_python "$STUBS/.uvpython"
     stub bats 'echo "Bats 9.9.9"'
     CACHE="$XDG_CACHE_HOME/git-semver-ci"
-    VENV="$CACHE/venv-3.10"
+    VENV="$CACHE/venv-3.11"
 }
 
 @test "fails naming requires-python when pyproject.toml has no floor" {
@@ -42,11 +42,11 @@ exit 0'
 }
 
 @test "uses python<floor> from PATH and builds the venv with the test deps" {
-    fake_python python3.10
+    fake_python python3.11
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"using Python 3.10 at $STUBS/python3.10"* ]]
-    logged "python3.10 -m venv --clear $VENV"
+    [[ "$output" == *"using Python 3.11 at $STUBS/python3.11"* ]]
+    logged "python3.11 -m venv --clear $VENV"
     logged ".fakepy -m pip install --quiet --upgrade pip"
     logged ".fakepy -m pip install --quiet pytest coverage>=7.10 pyyaml"
     logged ".fakepy --version"
@@ -62,10 +62,10 @@ exit 0'
 
 @test "uses the runner tool cache when python<floor> is not on PATH" {
     export RUNNER_TOOL_CACHE="$BATS_TEST_TMPDIR/toolcache"
-    fake_python "$RUNNER_TOOL_CACHE/Python/3.10.14/x64/bin/python3"
+    fake_python "$RUNNER_TOOL_CACHE/Python/3.11.9/x64/bin/python3"
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"using Python 3.10 at $RUNNER_TOOL_CACHE/Python/3.10.14/x64/bin/python3"* ]]
+    [[ "$output" == *"using Python 3.11 at $RUNNER_TOOL_CACHE/Python/3.11.9/x64/bin/python3"* ]]
     logged "python3 -m venv --clear $VENV"
 }
 
@@ -73,9 +73,9 @@ exit 0'
     cp "$STUBS/.fakeuv" "$STUBS/uv"
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 0 ]
-    logged ".fakeuv python install 3.10"
-    logged ".fakeuv python find 3.10"
-    [[ "$output" == *"using Python 3.10 at $STUBS/.uvpython"* ]]
+    logged ".fakeuv python install 3.11"
+    logged ".fakeuv python find 3.11"
+    [[ "$output" == *"using Python 3.11 at $STUBS/.uvpython"* ]]
     logged ".uvpython -m venv --clear $VENV"
 }
 
@@ -86,7 +86,7 @@ exit 0'
     logged "python3 -m venv $CACHE/tools"
     logged ".fakepy -m pip install --quiet uv"
     [ -x "$CACHE/tools/bin/uv" ]
-    [[ "$output" == *"using Python 3.10 at $STUBS/.uvpython"* ]]
+    [[ "$output" == *"using Python 3.11 at $STUBS/.uvpython"* ]]
 }
 
 @test "outside CI, falls back to a new enough python3 when the floor cannot be had" {
@@ -99,7 +99,7 @@ case "$1" in
 esac'
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Python 3.10 not found; using Python 3.12.0 locally (CI runs the floor)"* ]]
+    [[ "$output" == *"Python 3.11 not found; using Python 3.12.0 locally (CI runs the floor)"* ]]
     logged "python3 -m venv --clear $VENV"
 }
 
@@ -111,7 +111,7 @@ case "$1" in
 esac'
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Python 3.10 not found (looked for python3.10 and the runner tool cache; uv could not install it)"* ]]
+    [[ "$output" == *"Python 3.11 not found (looked for python3.11 and the runner tool cache; uv could not install it)"* ]]
 }
 
 @test "in CI, fails rather than use another Python" {
@@ -123,12 +123,12 @@ case "$1" in
 esac'
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Python 3.10 not found"* ]]
+    [[ "$output" == *"Python 3.11 not found"* ]]
     not_logged "python3 -m venv --clear"
 }
 
 @test "links the bats on PATH into the venv" {
-    fake_python python3.10
+    fake_python python3.11
     run bash "$ROOT/ci/setup.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"using bats at $STUBS/bats"* ]]
@@ -138,7 +138,7 @@ esac'
 }
 
 @test "clones bats-core v1.11.1 into the cache when bats is missing" {
-    fake_python python3.10
+    fake_python python3.11
     rm "$STUBS/bats"
     stub git '
 dest="${@: -1}"
@@ -153,7 +153,7 @@ chmod +x "$dest/bin/bats"'
 }
 
 @test "reuses a cached bats-core without cloning again" {
-    fake_python python3.10
+    fake_python python3.11
     rm "$STUBS/bats"
     stub "$CACHE/bats-core-1.11.1/bin/bats" 'echo "Bats 1.11.1"'
     stub git 'exit 1'
@@ -164,7 +164,7 @@ chmod +x "$dest/bin/bats"'
 }
 
 @test "fails naming bats-core when it cannot be cloned" {
-    fake_python python3.10
+    fake_python python3.11
     rm "$STUBS/bats"
     stub git 'exit 128'
     run bash "$ROOT/ci/setup.sh"
@@ -173,7 +173,7 @@ chmod +x "$dest/bin/bats"'
 }
 
 @test "fails when a clone leaves no bats executable" {
-    fake_python python3.10
+    fake_python python3.11
     rm "$STUBS/bats"
     stub git 'mkdir -p "${@: -1}"'
     run bash "$ROOT/ci/setup.sh"
