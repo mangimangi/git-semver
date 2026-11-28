@@ -54,21 +54,40 @@ printf "GH_TOKEN=%s\n" "$GH_TOKEN"'
     [ ! -e pwned ] && [ ! -e pwned2 ]
 }
 
-@test "GH_TOKEN is VENDOR_PAT when set" {
+@test "GH_TOKEN is CICD_WRITE_TOKEN when set" {
+    export CICD_WRITE_TOKEN=cwt VENDOR_PAT=pat GITHUB_TOKEN=gt
+    run bash "$ROOT/ci/update-vendored.sh"
+    [[ "$output" == *"GH_TOKEN=cwt"* ]]
+}
+
+@test "an empty CICD_WRITE_TOKEN falls back to VENDOR_PAT" {
+    export CICD_WRITE_TOKEN= VENDOR_PAT=pat GITHUB_TOKEN=gt
+    run bash "$ROOT/ci/update-vendored.sh"
+    [[ "$output" == *"GH_TOKEN=pat"* ]]
+}
+
+@test "GH_TOKEN is the deprecated VENDOR_PAT without CICD_WRITE_TOKEN" {
     export VENDOR_PAT=pat GITHUB_TOKEN=gt
     run bash "$ROOT/ci/update-vendored.sh"
     [[ "$output" == *"GH_TOKEN=pat"* ]]
 }
 
-@test "GH_TOKEN is GITHUB_TOKEN without VENDOR_PAT" {
+@test "GH_TOKEN is GITHUB_TOKEN without CICD_WRITE_TOKEN or VENDOR_PAT" {
     export GITHUB_TOKEN=gt
     run bash "$ROOT/ci/update-vendored.sh"
     [[ "$output" == *"GH_TOKEN=gt"* ]]
 }
 
-@test "GH_TOKEN is empty without either token" {
+@test "GH_TOKEN is empty without any token" {
     run bash "$ROOT/ci/update-vendored.sh"
     [[ "$output" == *"GH_TOKEN="$'\n'* || "$output" == *"GH_TOKEN=" ]]
+}
+
+@test "the script prints no token" {
+    stub python3 'exit 0'
+    export CICD_WRITE_TOKEN=cwt-secret VENDOR_PAT=pat-secret GITHUB_TOKEN=gt-secret
+    run bash "$ROOT/ci/update-vendored.sh"
+    [[ "$output" != *secret* ]]
 }
 
 @test "exits with .vendored/install's status" {
