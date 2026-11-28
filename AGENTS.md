@@ -1,16 +1,16 @@
 # AGENTS.md
 
-Config-driven semantic versioning for git repos. File changes trigger patch bumps on merge; minor/major are manual.
+Config-driven semantic versioning for git repos. By default file changes trigger patch bumps on merge; with `"bump_on": "pull_request"` (as this repo uses) the pull request bumps and the merge is tagged.
 
 ## Key Files
 
 | File | Role |
 |------|------|
-| `git-semver` | Core Python script — `version`, `check`, `bump`, `bump-all`, `tag` subcommands |
-| `release` | CI orchestration — with no subcommand decides bump, publish or nothing (called by the git-cicd `release` job); `bump`/`publish` are called by `version-bump.yml` |
+| `git-semver` | Core Python script — `version`, `check`, `check-bump`, `bump`, `bump-all`, `tag`, `released` subcommands |
+| `release` | CI orchestration — with no subcommand decides bump, publish or nothing, or with `bump_on: pull_request` tags the landed commit (called by the git-cicd `release` job); `bump`/`publish` are called by `version-bump.yml` |
 | `install.sh` | Installs git-semver into consumer repos |
 | `.vendored/configs/git-semver.json` | Versioning config for this repo (dogfooded) |
-| `.vendored/configs/git-cicd.json` | Pull request checks and the `release` job for this repo, run by git-cicd |
+| `.vendored/configs/git-cicd.json` | Pull request checks (including `version-check`) and the `release` job for this repo, run by git-cicd |
 | `ci/setup.sh`, `ci/test.sh` | Setup and step of the `test` job |
 | `ci/update-vendored.sh` | Step of the `update-vendored` job: runs `.vendored/install` with the job's inputs |
 | `tests/bats/` | bats tests of `install.sh` and the `ci/` scripts |
@@ -24,7 +24,7 @@ Scripts use Python 3 with no external dependencies. Type annotations are used th
 
 ### Running Checks
 
-Pull request checks are git-cicd jobs declared in `.vendored/configs/git-cicd.json`: `test` (pytest under coverage on the Python floor `requires-python` names in `pyproject.toml`, then the bats tests in `tests/bats/`) and `vendor-check` (`.vendored/check`).
+Pull request checks are git-cicd jobs declared in `.vendored/configs/git-cicd.json`: `test` (pytest under coverage on the Python floor `requires-python` names in `pyproject.toml`, then the bats tests in `tests/bats/`), `vendor-check` (`.vendored/check`) and, on pull requests into `main`, `version-check` (the root `git-semver check-bump`).
 
 Coverage measures `git-semver` and `release` (including runs a test starts as a subprocess) and the job fails when the total or either file is below 99%. A new behaviour of either script needs a test; a line is excluded only when no test can reach it, with a comment on the line saying why. A behaviour of `install.sh` or a `ci/` script needs a bats test. Run them locally the way CI does:
 
@@ -37,7 +37,9 @@ Coverage measures `git-semver` and `release` (including runs a test starts as a 
 
 ### Releasing
 
-The git-cicd `release` job (`.vendored/configs/git-cicd.json`) runs the root `release` with no subcommand on every merge to `main`: a change to a file in `files` (`.vendored/configs/git-semver.json`) is bumped as a patch, a merged `chore: bump version` commit is tagged and gets a GitHub Release, a `chore: install` commit does nothing. Minor and major bumps are started by hand: Actions tab → **Manual** → run on `main` with `job` = `release` and `inputs` = e.g. `{"bump_type": "minor", "subdirectory": "", "changelog_description": "..."}`. It runs the root `release`, not `.vendored/pkg/git-semver/release`, so a release uses the code on the branch.
+This repo bumps the version in the pull request (`"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`). A change to a file in `files` must bump `VERSION` in the same pull request: run `./git-semver bump patch --no-push` (or `minor`/`major`; `--no-push` commits the bump without tagging or pushing) and push the commit. The `version-check` job (`git-semver check-bump`, pull requests into `main` only) fails until the version is higher than `main`'s and prints that command. Pull requests into `plan/**` are not checked; the pull request into `main` bumps once.
+
+On every merge to `main` the git-cicd `release` job runs the root `release` with no subcommand: it tags the landed commit with the version it carries, pushes the tag and creates the GitHub Release. It pushes nothing to `main`, does not move the `latest` tag and does not look at commit subjects (`chore: bump version`, `chore: install`). A version already tagged at another commit fails the job. A manual run (Actions tab → **Manual**, `job` = `release`) releases the current commit; the job has no inputs, so minor and major bumps are made in a pull request. Both jobs run the root scripts, not `.vendored/pkg/git-semver/`, so they use the code on the branch.
 
 To run only the tests: `ci/test.sh` (after `git-cicd check --setup`), or `coverage run -m pytest tests/ && coverage combine && coverage report` and `bats tests/bats` (needs `pytest`, `coverage>=7.10`, `pyyaml` and bats). Test config is in `pyproject.toml`. Tests cover: patterns, versions, config loading, bump/release, updates, git helpers, changelog, commands, install.
 
