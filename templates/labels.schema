@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "git-deps.labels.json",
+  "description": "Labels a publisher puts on its released versions, at the root of the repository's default branch. Written by git-semver label/unlabel; read by git-deps. Unknown label names, label fields and top-level keys are allowed: a reader keeps and ignores what it does not know.",
+  "type": "object",
+  "required": ["format", "versions"],
+  "additionalProperties": true,
+  "properties": {
+    "format": {
+      "type": "integer",
+      "const": 1,
+      "description": "Format version of this file. A reader refuses a format it does not support"
+    },
+    "versions": {
+      "type": "object",
+      "description": "Labels per released version, keyed by the full version tag name: vX.Y.Z for the root, <subdir>/vX.Y.Z for a subdirectory component",
+      "propertyNames": {
+        "pattern": "^(?:.+/)?v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {"$ref": "#/$defs/label"}
+      }
+    }
+  },
+  "$defs": {
+    "label": {
+      "type": "object",
+      "required": ["name", "date", "commit"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The label: \"defect\" (the version should not be used); a reader ignores a name it does not know"
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[^\\r\\n]*$",
+          "description": "Why, in one line (git-semver label requires it for defect)"
+        },
+        "date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "UTC date the label was made (YYYY-MM-DD)"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The commit the version's tag pointed at when the label was made"
+        },
+        "fixed_in": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Optional: the version (X.Y.Z, same component) that fixes it"
+        }
+      }
+    }
+  }
+}
