@@ -53,6 +53,10 @@ def env(monkeypatch):
         "GITHUB_EVENT_NAME", "GITHUB_EVENT_BEFORE", "GITHUB_SHA",
         "INPUT_BUMP_TYPE", "INPUT_SUBDIRECTORY", "INPUT_CHANGELOG_DESCRIPTION",
         "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF",
+        "CICD_TRIGGER", "CICD_BASE", "CICD_HEAD", "CICD_TARGET_BRANCH",
+        "CICD_SOURCE_BRANCH", "CICD_JOB", "CICD_CHANGED_FILES",
+        "CICD_INPUT_BUMP_TYPE", "CICD_INPUT_SUBDIRECTORY",
+        "CICD_INPUT_CHANGELOG_DESCRIPTION",
     ]
     for key in cleared:
         monkeypatch.delenv(key, raising=False)
@@ -637,10 +641,18 @@ class TestCmdPublish:
 # ── main ──────────────────────────────────────────────────────────────────
 
 class TestMain:
-    def test_no_subcommand_exits(self, monkeypatch):
+    def test_no_subcommand_without_trigger_exits_with_reason(
+            self, monkeypatch, mock_run, env, capsys):
+        # No subcommand is now the auto entry point; with no trigger
+        # variables it still refuses, naming what is missing.
+        calls, _ = mock_run
+        env()
         monkeypatch.setattr(sys, "argv", ["semver"])
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             bar.main()
+        assert exc.value.code != 0
+        assert "CICD_TRIGGER" in capsys.readouterr().err
+        assert calls == []
 
     def test_unknown_subcommand_exits(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["semver", "unknown"])
@@ -667,3 +679,297 @@ class TestMain:
         # git-semver tag --push called
         semver_calls = [c for c in calls if c[0] == bar.SEMVER_SCRIPT]
         assert len(semver_calls) == 1
+
+
+# ── release with no subcommand ────────────────────────────────────────────
+
+def _auto_run(calls, subject, *, bumped=True, push_stderr="", push_code=0,
+              tags="v1.0.1\nlatest\n"):
+    """A fake run(): landed commit `subject`; bump-all moves HEAD when `bumped`."""
+    rev_parse = iter(["pre_sha\n", "new_sha\n" if bumped else "pre_sha\n"])
+
+    def _run(*cmd, check=True, capture=True):
+        calls.append(cmd)
+        if cmd[:4] == ("git", "log", "-1", "--format=%s"):
+            return _make_result(stdout=subject + "\n")
+        if cmd[:2] == ("git", "rev-parse") and cmd[2:] == ("HEAD",):
+            return _make_result(stdout=next(rev_parse))
+        if cmd[:3] == ("git", "log", "-1"):
+            return _make_result(stdout="chore: bump version v1.0.1\n")
+        if cmd[:2] == ("git", "push") and len(cmd) == 2:
+            return _make_result(stderr=push_stderr, returncode=push_code)
+        if cmd[:3] == ("git", "tag", "--points-at"):
+            return _make_result(stdout=tags)
+        if cmd[:3] == ("git", "describe", "--tags"):
+            return _make_result(stdout="v1.1.0\n")
+        return _make_result()
+
+    return _run
+
+
+def _semver(calls):
+    return [c[1:] for c in calls if c[0] == bar.SEMVER_SCRIPT]
+
+
+def _gh(calls):
+    return [c for c in calls if c[0] == "gh"]
+
+
+def _pushes(calls):
+    return [c for c in calls if c[:2] == ("git", "push") and len(c) == 2]
+
+
+@pytest.fixture
+def config(tmp_path, monkeypatch):
+    def _write(install=None):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"install": install} if install else {}))
+        monkeypatch.setattr(bar, "CONFIG_PATH", str(cfg))
+    _write()
+    return _write
+
+
+@pytest.fixture
+def auto(monkeypatch):
+    """Run `release` with no subcommand against a fake run(); return calls."""
+    def _go(subject="feat: something", **kwargs):
+        calls = []
+        monkeypatch.setattr(bar, "run", _auto_run(calls, subject, **kwargs))
+        monkeypatch.setattr(sys, "argv", ["release"])
+        bar.main()
+        return calls
+    return _go
+
+
+class TestAutoMerge:
+    def test_bump_commit_publishes(self, auto, env, config):
+        env(CICD_TRIGGER="merge", CICD_BASE="base", CICD_HEAD="head",
+            GITHUB_REPOSITORY="owner/repo")
+        calls = auto("chore: bump version to v1.0.1 (#12)")
+
+        assert ("git", "log", "-1", "--format=%s", "head") in calls
+        assert _semver(calls) == [("tag", "--push")]
+        assert [c[3] for c in _gh(calls)] == ["v1.0.1"]
+        assert _pushes(calls) == []
+
+    def test_install_commit_does_nothing(self, auto, env, config, capsys):
+        env(CICD_TRIGGER="merge", CICD_BASE="base", CICD_HEAD="head")
+        calls = auto("chore: install git-semver v0.0.15 (#88)")
+
+        assert calls == [("git", "log", "-1", "--format=%s", "head")]
+        assert "nothing to do" in capsys.readouterr().out
+
+    def test_ordinary_commit_bumps_pushes_tags_releases(self, auto, env, config):
+        env(CICD_TRIGGER="merge", CICD_BASE="base123", CICD_HEAD="head",
+            CICD_TARGET_BRANCH="main", GITHUB_REPOSITORY="owner/repo")
+        calls = auto("feat: add thing (#5)")
+
+        assert _semver(calls) == [
+            ("bump-all", "--since", "base123", "--no-push"),
+            ("tag", "--push"),
+        ]
+        assert len(_pushes(calls)) == 1
+        assert [c[3] for c in _gh(calls)] == ["v1.0.1"]
+
+    def test_no_configured_file_changed_no_bump(self, auto, env, config):
+        env(CICD_TRIGGER="merge", CICD_BASE="base", CICD_HEAD="head")
+        calls = auto("docs: typo", bumped=False)
+
+        assert _semver(calls) == [("bump-all", "--since", "base", "--no-push")]
+        assert _pushes(calls) == []
+        assert _gh(calls) == []
+
+    def test_on_merge_false_skips(self, auto, env, config, capsys):
+        config({"on_merge": False})
+        env(CICD_TRIGGER="merge", CICD_BASE="base", CICD_HEAD="head")
+        calls = auto("feat: x")
+
+        assert _semver(calls) == []
+        assert "on_merge is false" in capsys.readouterr().out
+
+    def test_automerge_false_opens_pr(self, auto, env, config):
+        config({"automerge": False})
+        env(CICD_TRIGGER="merge", CICD_BASE="base", CICD_HEAD="head")
+        calls = auto("feat: x")
+
+        assert _pushes(calls) == []
+        checkout = [c for c in calls if c[:3] == ("git", "checkout", "-b")]
+        assert checkout and checkout[0][3].startswith("chore/bump-version-")
+        assert _gh(calls)[0][:3] == ("gh", "pr", "create")
+        assert ("tag", "--push") not in _semver(calls)
+
+    def test_protected_branch_falls_back_to_pr_no_tag(self, auto, env, config):
+        env(CICD_TRIGGER="merge", CICD_BASE="base", CICD_HEAD="head")
+        calls = auto("feat: x", push_code=1,
+                     push_stderr="remote: error: GH006: Protected branch")
+
+        assert _gh(calls)[0][:3] == ("gh", "pr", "create")
+        assert ("tag", "--push") not in _semver(calls)
+
+    def test_missing_base_errors(self, auto, env, config, capsys):
+        env(CICD_TRIGGER="merge", CICD_HEAD="head")
+        with pytest.raises(SystemExit) as exc:
+            auto("feat: x")
+        assert exc.value.code != 0
+        assert "CICD_BASE" in capsys.readouterr().err
+
+    def test_github_push_variables(self, auto, env, config):
+        env(GITHUB_EVENT_NAME="push", GITHUB_EVENT_BEFORE="before1",
+            GITHUB_SHA="sha1", GITHUB_REPOSITORY="owner/repo")
+        calls = auto("feat: x")
+
+        assert ("git", "log", "-1", "--format=%s", "sha1") in calls
+        assert _semver(calls)[0] == ("bump-all", "--since", "before1", "--no-push")
+
+    def test_github_push_bump_commit_publishes(self, auto, env, config):
+        env(GITHUB_EVENT_NAME="push", GITHUB_EVENT_BEFORE="before1",
+            GITHUB_REPOSITORY="owner/repo")
+        calls = auto("chore: bump version v1.0.1")
+
+        assert ("git", "log", "-1", "--format=%s", "HEAD") in calls
+        assert _semver(calls) == [("tag", "--push")]
+
+    def test_cicd_base_wins_over_github_before(self, auto, env, config):
+        env(CICD_TRIGGER="merge", CICD_BASE="cicd_base", CICD_HEAD="cicd_head",
+            GITHUB_EVENT_NAME="push", GITHUB_EVENT_BEFORE="gh_before",
+            GITHUB_SHA="gh_sha")
+        calls = auto("feat: x")
+
+        assert ("git", "log", "-1", "--format=%s", "cicd_head") in calls
+        assert _semver(calls)[0] == ("bump-all", "--since", "cicd_base", "--no-push")
+
+    def test_sync_uses_cicd_target_branch(self, auto, env, config):
+        env(CICD_TRIGGER="merge", CICD_BASE="b", CICD_HEAD="h",
+            CICD_TARGET_BRANCH="release-1", GITHUB_REF="refs/heads/main")
+        calls = auto("feat: x", bumped=False)
+
+        pulls = [c for c in calls if c[:3] == ("git", "pull", "--ff-only")]
+        assert pulls == [("git", "pull", "--ff-only", "origin", "release-1")]
+
+
+class TestAutoManual:
+    @pytest.mark.parametrize("bump_type", ["patch", "minor", "major"])
+    def test_cicd_bump_type(self, auto, env, config, bump_type):
+        env(CICD_TRIGGER="manual", CICD_INPUT_BUMP_TYPE=bump_type,
+            CICD_INPUT_SUBDIRECTORY="", CICD_INPUT_CHANGELOG_DESCRIPTION="")
+        calls = auto()
+
+        assert _semver(calls)[0] == ("bump", bump_type, "--no-push")
+
+    def test_cicd_subdirectory_and_description(self, auto, env, config):
+        env(CICD_TRIGGER="manual", CICD_INPUT_BUMP_TYPE="minor",
+            CICD_INPUT_SUBDIRECTORY="backend",
+            CICD_INPUT_CHANGELOG_DESCRIPTION="New API")
+        calls = auto()
+
+        assert _semver(calls)[0] == (
+            "bump", "minor", "--no-push",
+            "--subdir", "backend", "--description", "New API")
+        assert len(_pushes(calls)) == 1
+        assert ("tag", "--push") in _semver(calls)
+
+    def test_defaults_to_patch(self, auto, env, config):
+        env(CICD_TRIGGER="manual")
+        calls = auto()
+
+        assert _semver(calls)[0] == ("bump", "patch", "--no-push")
+
+    def test_empty_bump_type_defaults_to_patch(self, auto, env, config):
+        env(CICD_TRIGGER="manual", CICD_INPUT_BUMP_TYPE="")
+        calls = auto()
+
+        assert _semver(calls)[0] == ("bump", "patch", "--no-push")
+
+    def test_github_dispatch_inputs(self, auto, env, config):
+        env(GITHUB_EVENT_NAME="workflow_dispatch", INPUT_BUMP_TYPE="major",
+            INPUT_SUBDIRECTORY="web", INPUT_CHANGELOG_DESCRIPTION="Big")
+        calls = auto()
+
+        assert _semver(calls)[0] == (
+            "bump", "major", "--no-push",
+            "--subdir", "web", "--description", "Big")
+
+    def test_cicd_inputs_win_over_github_inputs(self, auto, env, config):
+        env(CICD_TRIGGER="manual", CICD_INPUT_BUMP_TYPE="minor",
+            CICD_INPUT_SUBDIRECTORY="",
+            INPUT_BUMP_TYPE="major", INPUT_SUBDIRECTORY="web")
+        calls = auto()
+
+        assert _semver(calls)[0] == ("bump", "minor", "--no-push")
+
+    def test_automerge_false_opens_pr(self, auto, env, config):
+        config({"automerge": False})
+        env(CICD_TRIGGER="manual", CICD_INPUT_BUMP_TYPE="minor")
+        calls = auto()
+
+        assert _pushes(calls) == []
+        assert _gh(calls)[0][:3] == ("gh", "pr", "create")
+
+
+class TestAutoTrigger:
+    def test_cicd_trigger_wins_over_github_event(self, auto, env, config):
+        env(CICD_TRIGGER="manual", GITHUB_EVENT_NAME="push",
+            GITHUB_EVENT_BEFORE="before")
+        calls = auto()
+
+        assert _semver(calls)[0][0] == "bump"
+
+    @pytest.mark.parametrize("trigger", ["open", "cron"])
+    def test_other_cicd_triggers_refused(self, auto, env, config, capsys, trigger):
+        env(CICD_TRIGGER=trigger)
+        with pytest.raises(SystemExit) as exc:
+            calls = auto()
+        assert exc.value.code != 0
+        err = capsys.readouterr().err
+        assert repr(trigger) in err and "CICD_TRIGGER" in err
+
+    def test_refused_trigger_runs_nothing(self, monkeypatch, mock_run, env, config):
+        calls, _ = mock_run
+        env(CICD_TRIGGER="cron")
+        monkeypatch.setattr(sys, "argv", ["release"])
+        with pytest.raises(SystemExit):
+            bar.main()
+        assert calls == []
+
+    def test_unknown_github_event_refused(self, auto, env, config, capsys):
+        env(GITHUB_EVENT_NAME="pull_request")
+        with pytest.raises(SystemExit) as exc:
+            auto()
+        assert exc.value.code != 0
+        assert "'pull_request'" in capsys.readouterr().err
+
+
+# ── run (the real subprocess wrapper) ───────────────────────────────────────
+
+class TestRun:
+    def test_returns_captured_result(self):
+        result = bar.run(sys.executable, "-c", "print('hi')")
+        assert result.returncode == 0
+        assert result.stdout == "hi\n"
+
+    def test_failure_exits_1_naming_command_and_stderr(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            bar.run(sys.executable, "-c",
+                    "import sys; sys.stderr.write('boom\\n'); sys.exit(3)")
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert f"Command failed: {sys.executable} -c" in err
+        assert "boom" in err
+
+    def test_failure_with_empty_stderr_names_only_command(self, capsys):
+        with pytest.raises(SystemExit):
+            bar.run(sys.executable, "-c", "import sys; sys.exit(2)")
+        err = capsys.readouterr().err
+        assert err.startswith("Command failed: ")
+        assert err.count("\n") == 1
+
+    def test_check_false_returns_failure(self):
+        result = bar.run(sys.executable, "-c", "import sys; sys.exit(4)",
+                         check=False)
+        assert result.returncode == 4
+
+    def test_uncaptured_failure_prints_no_stderr(self, capfd):
+        with pytest.raises(SystemExit):
+            bar.run(sys.executable, "-c", "import sys; sys.exit(5)",
+                    capture=False)
+        assert capfd.readouterr().err.startswith("Command failed: ")

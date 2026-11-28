@@ -84,6 +84,7 @@ git-semver check [--since <commit>] [--subdir <name>] # Check if a bump is neede
 git-semver bump [patch|minor|major] [opts]            # Bump version, commit, tag, push
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
 git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
+git-semver released [<ref>]                           # Print the version tags released at a commit
 ```
 
 All commands accept `--config <path>` to specify a non-default config file.
@@ -143,6 +144,17 @@ Creates version tags from VERSION files without modifying any files. Reads the c
 | `--config <path>` | Specify a non-default config file |
 
 Idempotent: if a version tag already exists (at any commit), it is skipped. In a monorepo this is the expected state for untouched components — only the bumped component has a new version that needs tagging.
+
+### `git-semver released [<ref>]`
+
+Prints the version tags pointing at a commit (default `HEAD`), one per line, sorted, as full tag names: `vX.Y.Z` for the root, `<subdir>/vX.Y.Z` for a subdirectory. Never prints `latest` or any other non-version tag. When no version was released at the commit it prints nothing and exits 0; a ref that is not a commit is an error (exit 1).
+
+Read-only and local: it reads only the repository's tags, so it needs no config file, no token and no network. A repository's own step after git-semver's release uses it to tell whether this run released a version, and which (see [Publishing after a release](#publishing-after-a-release)).
+
+```bash
+git-semver released              # e.g. v1.4.0
+git-semver released "$CICD_HEAD" # ask about a specific commit
+```
 
 ### Local usage
 
@@ -315,6 +327,95 @@ Runs when a `chore: bump version` commit lands on main (either direct push or me
 
 The bump and publish jobs never run together — their `if` conditions are mutually exclusive.
 
+### `release` with no subcommand
+
+`release` can also be called with no subcommand. It then works out for itself which case the run is in and does it, so the bump-or-publish decision needs no workflow `if` conditions and no per-repo wrapper script:
+
+| Run | Landed commit's subject | What `release` does |
+|-----|-------------------------|---------------------|
+| merge (a change landed on a branch) | starts with `chore: bump version` | publish: `git-semver tag --push` and a GitHub Release per version tag (as `release publish`) |
+| merge | starts with `chore: install` | nothing, exit 0 |
+| merge | anything else | bump, as `release bump` on push: honours `on_merge` and `automerge`, falls back to a PR on a protected branch, and tags and releases in the same run when the direct push worked |
+| manual (started by hand) | — | bump, as `release bump` on `workflow_dispatch`, with `bump_type` (default `patch`), `subdirectory` and `changelog_description` |
+| any other trigger (`open`, `cron`, another GitHub event, or none) | — | refused with a reason, non-zero exit |
+
+It reads the run from git-cicd's variables when they are set and from the GitHub Actions variables otherwise; whenever both are set (a git-cicd job on Actions), git-cicd's win:
+
+| git-cicd | GitHub Actions | Meaning |
+|----------|----------------|---------|
+| `CICD_TRIGGER` (`merge`, `manual`) | `GITHUB_EVENT_NAME` (`push`, `workflow_dispatch`) | Which case |
+| `CICD_BASE` | `GITHUB_EVENT_BEFORE` | Commit before the push (what `bump-all --since` diffs against) |
+| `CICD_HEAD` | `GITHUB_SHA` (else `HEAD`) | Landed commit whose subject is tested |
+| `CICD_TARGET_BRANCH` | `GITHUB_REF` | Branch fast-forwarded to before bumping or tagging |
+| `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY`, `CICD_INPUT_CHANGELOG_DESCRIPTION` | `INPUT_BUMP_TYPE`, `INPUT_SUBDIRECTORY`, `INPUT_CHANGELOG_DESCRIPTION` | Manual-run inputs |
+
+`gh` reads its token from `GH_TOKEN` or `GITHUB_TOKEN` (git-cicd's merge and manual workflows pass `GITHUB_TOKEN`). `release bump` and `release publish` are unchanged; `version-bump.yml` keeps calling them.
+
+### Releasing with git-cicd (instead of version-bump.yml)
+
+`version-bump.yml` stays the default install. A repository that runs its CI through [git-cicd](https://github.com/mangimangi/git-cicd) can instead release with a git-cicd job that calls `release` with no subcommand; the job replaces `version-bump.yml` (remove that workflow when you add the job, so a merge is not released twice). Declare it in `.vendored/configs/git-cicd.json`:
+
+```json
+"release": {
+  "name": "Release",
+  "on": ["merge"],
+  "branches": ["main"],
+  "paths": ["**"],
+  "steps": [".vendored/pkg/git-semver/release"],
+  "inputs": {
+    "bump_type": {
+      "description": "Version bump type",
+      "choices": ["patch", "minor", "major"],
+      "default": "patch"
+    },
+    "subdirectory": {
+      "description": "Subdirectory to bump (leave empty for root)",
+      "default": ""
+    },
+    "changelog_description": {
+      "description": "Changelog entry text (leave empty to collect from commits)",
+      "default": ""
+    }
+  }
+}
+```
+
+then run `.vendored/pkg/git-cicd/git-cicd generate` and commit the generated `git-cicd-merge.yml` and `git-cicd-manual.yml`.
+
+- **On merge** to `main`, `release` tests the landed commit: a bump commit is tagged and released, an install commit is left alone, anything else is bumped (see [`release` with no subcommand](#release-with-no-subcommand)). `paths: ["**"]` makes every merge reach `release`; whether a bump is needed is `git-semver bump-all`'s decision. Keep `VERSION` out of `needs_nothing`, or a bump commit would need no job and never be published.
+- **By hand**, the Actions tab's **Manual** workflow runs the job with `job` = `release` and `inputs` = a JSON object such as `{"bump_type": "minor", "subdirectory": "backend"}`; the inputs reach `release` as `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY` and `CICD_INPUT_CHANGELOG_DESCRIPTION`.
+- git-cicd's merge and manual workflows already give the job `contents: write` and `pull-requests: write`, fetch all history and tags, pass `GITHUB_TOKEN` (which `gh` reads) and run one after another, as `version-bump.yml`'s concurrency group does.
+
+### Publishing after a release
+
+git-semver's publish is a tag plus a GitHub Release. Publishing anything else (a package to PyPI, a container image) is the repository's own later step in the same git-cicd job, after `release`:
+
+```json
+"release": {
+  "name": "Release",
+  "on": ["merge"],
+  "branches": ["main"],
+  "paths": ["**"],
+  "steps": [".vendored/pkg/git-semver/release", "ci/publish-image.sh"]
+}
+```
+
+The later step asks `git-semver released` whether this run released a version and stops when none was:
+
+```bash
+#!/bin/bash
+# ci/publish-image.sh
+set -euo pipefail
+tags=$(.vendored/pkg/git-semver/git-semver released)
+[ -z "$tags" ] && exit 0
+for tag in $tags; do
+    echo "publishing $tag"
+    # build and push the image for $tag
+done
+```
+
+With an unprotected branch, the run for the merged change bumps, pushes, tags and releases in one go, so its later step sees the new version. With a protected branch, the run for the merged change only opens the bump pull request and its later step sees nothing; the version is seen by the later step of the run for the merged bump commit (`chore: bump version ...`), which is the run that tags and releases.
+
 ### Protected Branch Support
 
 Protected branches work automatically with no configuration changes. The flow adapts based on whether `git push` succeeds:
@@ -356,25 +457,73 @@ git-semver uses git-vendored for unified install/protection across all vendored 
 ├── manifests/               # Version and schema tracking per vendor
 └── pkg/
     ├── git-semver/          # Core scripts (git-semver, release)
-    └── git-dogfood/
-        └── resolve          # Finds dogfood vendor
+    └── git-cicd/            # Runs this repo's pull request checks and release
 .github/workflows/
-├── install-vendored.yml     # Installs/updates any vendor
-├── check-vendor.yml         # Blocks direct edits to vendor files
-└── dogfood.yml              # Triggers self-update after release
+├── git-cicd-open.yml        # Generated by git-cicd: pull request checks
+├── git-cicd-merge.yml       # Generated by git-cicd: release on merge to main
+├── git-cicd-cron.yml        # Generated by git-cicd: the weekly update-vendored run
+└── git-cicd-manual.yml      # Generated by git-cicd: release or update-vendored by hand
 ```
 
 ### How it works
 
-1. **install-vendored.yml** — single workflow handles all vendor updates (schedule, manual, or called by dogfood)
-2. **check-vendor.yml** — runs `.vendored/check` on PRs to block unauthorized vendor file edits
-3. **dogfood.yml** — after Bump & Release succeeds, finds the vendor with `dogfood: true` and triggers install-vendored
+1. **The `update-vendored` job** (see [How vendored tools are updated here](#how-vendored-tools-are-updated-here)) installs or updates the vendored tools and opens the install pull requests. In this repository it replaces `install-vendored.yml`, which git-vendored still installs elsewhere.
+2. **The `vendor-check` job** (below) runs `.vendored/check` on PRs to block unauthorized vendor file edits. In this repository it replaces `check-vendor.yml`, which git-vendored still installs elsewhere.
+
+### Pull request checks
+
+git-semver's own pull request checks (and its release, below) run through [git-cicd](https://github.com/mangimangi/git-cicd). They are declared as jobs in `.vendored/configs/git-cicd.json`:
+
+| Job | Row | Runs |
+|-----|-----|------|
+| `test` | `Open / Unit Tests / git-semver:test` | `ci/setup.sh` (installs the Python floor from `requires-python` in `pyproject.toml`, plus pytest, coverage and pyyaml, into a venv, and bats-core), then `ci/test.sh` (pytest under coverage, the coverage gate, then the bats tests in `tests/bats/`) |
+| `vendor-check` | `Open / Vendor Check / git-semver:vendor-check` | `.vendored/check` |
+
+Documents and tracker records (`*.md` at the root, `docs/**`, `commands/*.md`, `LICENSE`, `.pearls` issues, archive and docs, `.madreperla/sessions.jsonl`) need no job. The result is the `Verdict / git-cicd:verdict` commit status on the pull request's head commit.
+
+The `test` job measures line coverage of the two shipped Python scripts, `git-semver` and `release`, including runs a test starts as a subprocess, prints the per-file report with missing lines, and fails when the total or either file is below 99% (`[tool.coverage.*]` in `pyproject.toml`). `install.sh` and the scripts under `ci/` are tested with bats (`tests/bats/*.bats`); each test runs the script in a sandbox whose PATH holds only stubs and a few system tools.
+
+Run the same checks locally:
+
+```bash
+.vendored/pkg/git-cicd/git-cicd check --setup   # installs what the jobs need, then runs them
+.vendored/pkg/git-cicd/git-cicd check           # later runs reuse that setup
+```
+
+`.github/workflows/git-cicd-open.yml`, `git-cicd-merge.yml`, `git-cicd-cron.yml` and `git-cicd-manual.yml` are generated: after changing the config or upgrading git-cicd, run `.vendored/pkg/git-cicd/git-cicd generate` and commit what it writes.
+
+### How a release happens here
+
+git-semver releases itself through git-cicd too, with a `release` job in `.vendored/configs/git-cicd.json`:
+
+| Job | Row | Runs |
+|-----|-----|------|
+| `release` | `Merge / Release / git-semver:release`, `Manual / Release / git-semver:release` | `release` at the repository root, with no subcommand |
+
+- **On every merge to `main`** the job runs this repository's own `release` (the root script, not the vendored copy under `.vendored/pkg/git-semver/`, which only gets a new entry point once a release is installed back). A merge that changed a file listed in `files` in `.vendored/configs/git-semver.json` is bumped (a patch) and the bump commit pushed; a merged `chore: bump version` commit is tagged and gets a GitHub Release; a `chore: install` commit does nothing.
+- **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, with `job` = `release` and `inputs` = a JSON object of `bump_type` (`patch`, `minor` or `major`; default `patch`), `subdirectory` and `changelog_description`, for example `{"bump_type": "minor", "changelog_description": "One-step release"}`.
+
+### How vendored tools are updated here
+
+The vendored tools (git-cicd, git-semver, git-vendored) are updated by the `update-vendored` job in `.vendored/configs/git-cicd.json`:
+
+| Job | Row | Runs |
+|-----|-----|------|
+| `update-vendored` | `Cron / Install Vendored / git-semver:update-vendored`, `Manual / Install Vendored / git-semver:update-vendored` | `ci/update-vendored.sh`: `.vendored/install <vendor> --version <version> --pr --deps=install` (plus `--private` when `private` is `true`) |
+
+- **Every Monday at 09:00 UTC** (`cron` `0 9 * * 1`) it runs on `main` for all vendors at their latest version and opens a pull request for each update.
+- **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, with `job` = `update-vendored` and `inputs` = a JSON object of `vendor` (default `all`), `version` (default `latest`) and `private` (`true` or `false`; default `false`, `true` uses `VENDOR_PAT`), for example `{"vendor": "git-cicd", "version": "latest"}`.
+
+The inputs reach the script as `CICD_INPUT_*` variables and are passed to `.vendored/install` as separate arguments, never through a shell. `GH_TOKEN` is the `VENDOR_PAT` secret when it is set, else the workflow's `GITHUB_TOKEN`.
 
 ### Vendor lifecycle
 
 ```
-code change → bump & release → dogfood → install-vendored → PR → merge
-              (git-semver)     (git-dogfood) (git-vendored)
+code change → release job → tag and GitHub Release
+              (git-semver, run by git-cicd)
+
+vendor update → update-vendored job → PR → merge
+                (.vendored/install, run by git-cicd)
 ```
 
 ## File Classification
@@ -389,11 +538,8 @@ code change → bump & release → dogfood → install-vendored → PR → merge
 | `.vendored/check` | Implementation | No — update via install-vendored |
 | `.vendored/config.json` | Config | Yes — vendor registry |
 | `.vendored/manifests/*` | Meta | Auto-managed |
-| `.vendored/pkg/git-dogfood/resolve` | Implementation | No — update via install-vendored |
 | `.github/workflows/version-bump.yml` | Workflow | No — installed by git-semver |
-| `.github/workflows/install-vendored.yml` | Workflow | No — installed by git-vendored |
 | `.github/workflows/check-vendor.yml` | Workflow | No — installed by git-vendored |
-| `.github/workflows/dogfood.yml` | Workflow | No — installed by git-dogfood |
 
 ## Commit Message Conventions
 

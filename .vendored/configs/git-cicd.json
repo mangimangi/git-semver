@@ -1,4 +1,74 @@
 {
-  "jobs": {},
-  "needs_nothing": []
+  "jobs": {
+    "test": {
+      "name": "Unit Tests",
+      "on": ["open"],
+      "branches": ["**"],
+      "paths": ["git-semver", "release", "install.sh", "templates/**", "tests/**", "pyproject.toml", "ci/**"],
+      "setup": "ci/setup.sh",
+      "steps": ["ci/test.sh"]
+    },
+    "vendor-check": {
+      "name": "Vendor Check",
+      "on": ["open"],
+      "branches": ["**"],
+      "paths": ["**"],
+      "steps": [".vendored/check"]
+    },
+    "release": {
+      "name": "Release",
+      "on": ["merge"],
+      "branches": ["main"],
+      "paths": ["**"],
+      "steps": ["release"],
+      "inputs": {
+        "bump_type": {
+          "description": "Version bump type",
+          "choices": ["patch", "minor", "major"],
+          "default": "patch"
+        },
+        "subdirectory": {
+          "description": "Subdirectory to bump (leave empty for root)",
+          "default": ""
+        },
+        "changelog_description": {
+          "description": "Changelog entry text (leave empty to collect from commits)",
+          "default": ""
+        }
+      }
+    },
+    "update-vendored": {
+      "name": "Install Vendored",
+      "on": ["cron"],
+      "cron": "0 9 * * 1",
+      "branches": ["main"],
+      "paths": ["**"],
+      "steps": ["ci/update-vendored.sh"],
+      "inputs": {
+        "vendor": {
+          "description": "Vendor to update (or all)",
+          "default": "all"
+        },
+        "version": {
+          "description": "Version to install (default: latest)",
+          "default": "latest"
+        },
+        "private": {
+          "description": "Vendor repo is private (use VENDOR_PAT)",
+          "choices": ["true", "false"],
+          "default": "false"
+        }
+      }
+    }
+  },
+  "needs_nothing": [
+    "*.md",
+    "LICENSE",
+    "docs/**",
+    "commands/*.md",
+    ".pearls/issues.jsonl",
+    ".pearls/archive/**",
+    ".pearls/docs/**",
+    ".madreperla/sessions.jsonl"
+  ]
 }

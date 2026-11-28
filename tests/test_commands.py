@@ -519,6 +519,17 @@ class TestBumpComponent:
 # ── cmd_tag ─────────────────────────────────────────────────────────────────
 
 class TestCmdTag:
+    def test_no_version_files_tags_nothing(self, make_config, mock_git, capsys):
+        path = make_config({
+            "files": [], "updates": {},
+            "frontend": {"version_file": "frontend/VERSION"},
+        })
+
+        git_semver.cmd_tag(make_args(config=path))
+        assert "No version files found" in capsys.readouterr().out
+        calls, _ = mock_git
+        assert calls == []
+
     def test_tags_root_version(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
             "files": [], "updates": {},
@@ -705,6 +716,106 @@ class TestCmdTag:
         assert ("tag", "-a", "frontend/v2.1.0", "-m", "frontend/v2.1.0") in git_cmds
 
 
+# ── cmd_released ────────────────────────────────────────────────────────────
+
+def _git_result(stdout="", returncode=0):
+    r = MagicMock()
+    r.stdout = stdout
+    r.stderr = ""
+    r.returncode = returncode
+    return r
+
+
+class TestCmdReleased:
+    def _tags(self, mock, stdout):
+        def _side(*args, **kwargs):
+            if args[:2] == ("tag", "--points-at"):
+                return _git_result(stdout)
+            return _git_result()
+        mock.side_effect = _side
+
+    def test_prints_version_tag(self, mock_git, capsys):
+        calls, mock = mock_git
+        self._tags(mock, "v1.2.3\nlatest\n")
+        git_semver.cmd_released(make_args(ref="HEAD"))
+        assert capsys.readouterr().out == "v1.2.3\n"
+
+    def test_latest_only_prints_nothing(self, mock_git, capsys):
+        calls, mock = mock_git
+        self._tags(mock, "latest\n")
+        assert git_semver.cmd_released(make_args(ref="HEAD")) is None
+        assert capsys.readouterr().out == ""
+
+    def test_untagged_prints_nothing(self, mock_git, capsys):
+        calls, mock = mock_git
+        self._tags(mock, "")
+        assert git_semver.cmd_released(make_args(ref="HEAD")) is None
+        assert capsys.readouterr().out == ""
+
+    def test_root_and_subdir_tags_sorted(self, mock_git, capsys):
+        calls, mock = mock_git
+        self._tags(mock, "v1.0.1\nlatest\nbackend/v2.3.0\n")
+        git_semver.cmd_released(make_args(ref="HEAD"))
+        assert capsys.readouterr().out == "backend/v2.3.0\nv1.0.1\n"
+
+    def test_non_version_tags_ignored(self, mock_git, capsys):
+        calls, mock = mock_git
+        self._tags(mock, "foo\nv1\nv1.2\nrelease-1.0.0\nv1.2.3-rc1\nv0.0.16\n")
+        git_semver.cmd_released(make_args(ref="HEAD"))
+        assert capsys.readouterr().out == "v0.0.16\n"
+
+    def test_explicit_ref(self, mock_git, capsys):
+        calls, mock = mock_git
+        self._tags(mock, "v3.0.0\n")
+        git_semver.cmd_released(make_args(ref="abc123"))
+        git_cmds = [c[0] for c in calls]
+        assert ("tag", "--points-at", "abc123") in git_cmds
+        assert ("rev-parse", "--verify", "--quiet", "abc123^{commit}") in git_cmds
+
+    def test_bad_ref_raises(self, mock_git):
+        calls, mock = mock_git
+        mock.return_value = _git_result(returncode=1)
+        with pytest.raises(git_semver.SemverError, match="not a commit: nope"):
+            git_semver.cmd_released(make_args(ref="nope"))
+
+
+class TestCmdReleasedRealRepo:
+    """Against a real temporary repository: local git only, no network."""
+
+    @pytest.fixture
+    def repo(self, tmp_repo):
+        import subprocess
+
+        def g(*args):
+            return subprocess.run(["git", *args], cwd=tmp_repo, check=True,
+                                  capture_output=True, text=True)
+        g("init", "-q")
+        g("-c", "user.name=t", "-c", "user.email=t@example.com",
+          "commit", "-q", "--allow-empty", "-m", "first")
+        g("-c", "user.name=t", "-c", "user.email=t@example.com",
+          "tag", "-a", "v0.1.0", "-m", "v0.1.0")
+        g("tag", "latest")
+        g("-c", "user.name=t", "-c", "user.email=t@example.com",
+          "commit", "-q", "--allow-empty", "-m", "second")
+        return g
+
+    def test_tagged_commit(self, repo, capsys):
+        git_semver.cmd_released(make_args(ref="HEAD~1"))
+        assert capsys.readouterr().out == "v0.1.0\n"
+
+    def test_untagged_head_via_main(self, repo, capsys):
+        with patch("sys.argv", ["git-semver", "released"]):
+            git_semver.main()
+        assert capsys.readouterr().out == ""
+
+    def test_bad_ref_exits_nonzero(self, repo, capsys):
+        with patch("sys.argv", ["git-semver", "released", "no-such-ref"]):
+            with pytest.raises(SystemExit) as exc_info:
+                git_semver.main()
+        assert exc_info.value.code == 1
+        assert "not a commit: no-such-ref" in capsys.readouterr().err
+
+
 # ── CLI / main ──────────────────────────────────────────────────────────────
 
 class TestMain:
@@ -762,6 +873,13 @@ class TestMain:
         args = parser.parse_args(["tag", "--subdir", "frontend"])
         assert args.command == "tag"
         assert args.subdir == "frontend"
+
+        args = parser.parse_args(["released"])
+        assert args.command == "released"
+        assert args.ref == "HEAD"
+
+        args = parser.parse_args(["released", "abc123"])
+        assert args.ref == "abc123"
 
     def test_build_parser_subdir_flag(self):
         parser = git_semver.build_parser()
