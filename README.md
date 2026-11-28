@@ -1,6 +1,6 @@
 # git-semver
 
-Config-driven semantic versioning for git repos. Declare which files matter, get automatic patch bumps on merge. Zero dependencies beyond Python 3 and git.
+Config-driven semantic versioning for git repos. Declare which files matter, get automatic patch bumps on merge. Zero dependencies beyond Python 3.11 or later and git.
 
 ## Features
 
@@ -13,7 +13,7 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 - **Protected branch support** — auto-detects branch protection and falls back to PR mode
 - **Changelog generation** — from commit messages, with configurable noise filters
 - **No PAT required** — core versioning uses `GITHUB_TOKEN`
-- **CI-agnostic core** — the script works anywhere git and Python 3 are available
+- **CI-agnostic core** — the script works anywhere git and Python are available
 
 ## Installation
 
@@ -91,7 +91,7 @@ git-semver bump [patch|minor|major] [opts]            # Bump version, commit, ta
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
 git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
 git-semver released [<ref>]                           # Print the version tags released at a commit
-git-semver check-bump [--base <rev>] [--head <rev>]  # Fail when configured files changed but the version was not raised
+git-semver check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]  # Fail when configured files changed but the version was not raised; in fixing mode push the patch bump
 ```
 
 All commands accept `--config <path>` to specify a non-default config file.
@@ -163,7 +163,7 @@ git-semver released              # e.g. v1.4.0
 git-semver released "$CICD_HEAD" # ask about a specific commit
 ```
 
-### `git-semver check-bump [--base <rev>] [--head <rev>]`
+### `git-semver check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]`
 
 Fails a pull request that changes configured files without raising the version. For the root and for each subdirectory component, when a file changed on `<head>` since it left `<base>` (`git diff <base>...<head>`, as git-cicd computes a pull request's changed files) matches the component's `files`, the version in its `version_file` at `<head>` must be a valid `X.Y.Z` strictly higher than the one at `<base>` (the target branch). Any increase passes: patch, minor or major.
 
@@ -177,9 +177,37 @@ Fails a pull request that changes configured files without raising the version. 
 |------|----------|
 | `--base <rev>` | Commit to compare with; default `$CICD_BASE`. Required from one or the other |
 | `--head <rev>` | Commit under test; default `$CICD_HEAD`, else `HEAD` |
+| `--fix` / `--no-fix` | Force fixing mode on or off (see below); default the [`push_bump`](#keys) key, which is on with `"bump_on": "pull_request"` |
+| `--source-branch <name>` | Pull request branch the fix is pushed to; default `$CICD_SOURCE_BRANCH` |
+| `--target-branch <name>` | Branch the pull request goes into; default `$CICD_TARGET_BRANCH` |
 | `--config <path>` | Specify a non-default config file |
 
-Read-only and local: it needs no token and no network, and writes nothing (no file edits, commits or tags). It is meant as the step of a git-cicd `open` job, which sets `CICD_BASE` (the target branch tip) and `CICD_HEAD` (the pull request head):
+The check itself is local: it needs no token and no network. With fixing mode off (`"push_bump": false`, `--no-fix`, or `bump_on` other than `pull_request` without `--fix`) it writes nothing (no file edits, commits or tags).
+
+**Fixing mode** (on by default with `"bump_on": "pull_request"`). When the only failures are components whose version is *unchanged* from the base's, the check raises each of them by a **patch** the way `git-semver bump` does (version file, `updates`, changelog entry) and makes one commit on top of the commit under test, `chore: bump version (root 0.1.1 -> 0.1.2, backend 0.3.0 -> 0.3.1)`, holding only the files the bump wrote (other changes in the worktree stay out). The commit under test must be the checked-out `HEAD`; otherwise it is an error naming both. When git has no committer identity (a CI runner), the commit is made as `git-semver <git-semver@users.noreply.github.com>`.
+
+- A component already raised by any amount (patch, minor or major) is left alone: a minor or major bump stays a person's decision. With nothing to fix no commit is made.
+- A version that went down, is malformed or is missing is an error, never fixed; when any component is in that state no commit is made at all.
+
+It then pushes the commit, never forced, to the pull request's source branch on `origin` (`git push origin HEAD:refs/heads/<source>`) with the token in `CICD_WRITE_TOKEN`. It does **not** push, and prints `Not pushing the bump: <reason>` plus the `fix:` command to run by hand, when:
+
+| Case | Reason printed |
+|------|----------------|
+| `CICD_WRITE_TOKEN` is unset or empty (no secret, a fork, the job did not declare it) | `no CICD_WRITE_TOKEN: declare it on the version check job` |
+| No source branch (neither `--source-branch` nor `CICD_SOURCE_BRANCH`) | `source branch unknown` |
+| The source branch is the target branch | `source branch <b> is the target branch` |
+| The source branch is a release branch (the target, `main` or `master`) | `source branch <b> is a release branch` |
+| The source branch is not on `origin` (`git ls-remote`; a fork's branch is never in this repository) | `branch <b> is not on origin` |
+| The branch on `origin` is no longer the commit under test | `branch <b> moved on from <head> (now <sha>)` |
+| `git push` itself fails | `git push failed: <git's message>` |
+
+Whether it pushed or not, the run exits 1: the commit under test lacked the bump, so it never records a pass. When it pushed it says `The pushed commit <sha> starts its own run; wait for that one` — that run checks the bumped commit and passes.
+
+The token is given to git for that one `ls-remote` and push only, through the environment (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` setting `http.https://github.com/.extraheader`: first an empty value, which drops the header `actions/checkout` stored with `GITHUB_TOKEN`, then `AUTHORIZATION: basic <base64 of x-access-token:token>`). It is never on a command line, never written to `.git/config`, and git's messages are printed with the token and its base64 form replaced by `***`.
+
+`CICD_WRITE_TOKEN` must be able to push to this repository: a fine-grained personal access token or a GitHub App token with **Contents: read and write** on it. `GITHUB_TOKEN` does not do: a push made with it starts no workflow, so the bumped commit would never be checked. To turn pushing off, set `"push_bump": false` (check only, as before) or pass `--no-fix`.
+
+It is meant as the step of a git-cicd `open` job, which sets `CICD_BASE` (the target branch tip), `CICD_HEAD` (the pull request head), `CICD_SOURCE_BRANCH` and `CICD_TARGET_BRANCH`. git-cicd gives a job a secret only when the job declares it, so the job lists `CICD_WRITE_TOKEN` under `secrets` (as git-cicd's README defines it); without the declaration the check fails naming the command, as before:
 
 ```json
 "version-check": {
@@ -187,9 +215,12 @@ Read-only and local: it needs no token and no network, and writes nothing (no fi
   "on": ["open"],
   "branches": ["main"],
   "paths": ["**"],
-  "steps": [[".vendored/pkg/git-semver/git-semver", "check-bump"]]
+  "steps": [[".vendored/pkg/git-semver/git-semver", "check-bump"]],
+  "secrets": ["CICD_WRITE_TOKEN"]
 }
 ```
+
+A local run on a branch that lacks the bump (including `git-cicd check`) makes the fix commit in your checkout too; it is pushed only when `CICD_WRITE_TOKEN` is exported. Pass `--no-fix` to only check.
 
 ### Local usage
 
@@ -263,9 +294,13 @@ Pattern matching for updates:
 - Pattern containing `=`: matches `pattern + quoted_version`, replaces with `pattern + "new_version"` (preserves quote style)
 - Pattern without `=`: matches `pattern + version`, replaces with `pattern + new_version`
 
+**`push_bump`** (default: `true` with `"bump_on": "pull_request"`; ignored otherwise)
+
+With `bump_on: pull_request`: `git-semver check-bump` raises a missing version by a patch and pushes it to the pull request branch with `CICD_WRITE_TOKEN` (see [`check-bump`](#git-semver-check-bump---base-rev---head-rev---fix--no-fix)). `false` = check only, as before. `--fix`/`--no-fix` override it for one run.
+
 **`bump_on`** (default: `"merge"`)
 
-When the version is bumped. `"merge"` (also when the key is absent) is the bump-on-merge path: `release` bumps after a change lands. `"pull_request"` moves the bump into the pull request: `git-semver check-bump` fails a pull request that changes configured files without raising the version, and `release` with no subcommand only tags the landed commit and publishes it (see [Bumping in the pull request](#bumping-in-the-pull-request-bump_on-pull_request)). Any other value is an error naming the allowed values.
+When the version is bumped. `"merge"` (also when the key is absent) is the bump-on-merge path: `release` bumps after a change lands. `"pull_request"` moves the bump into the pull request: `git-semver check-bump` fails a pull request that changes configured files without raising the version (and, unless `push_bump` is `false`, pushes the missing patch bump to its branch), and `release` with no subcommand only tags the landed commit and publishes it (see [Bumping in the pull request](#bumping-in-the-pull-request-bump_on-pull_request)). Any other value is an error naming the allowed values.
 
 **`changelog`** (default: enabled)
 
@@ -403,7 +438,7 @@ It reads the run from git-cicd's variables when they are set and from the GitHub
 
 ### Bumping in the pull request (`bump_on: pull_request`)
 
-With `"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`, the bump (version file, changelog, `updates`) is part of the pull request, checked by a [`git-semver check-bump`](#git-semver-check-bump---base-rev---head-rev) job, and `release` with no subcommand, on a merge, does not bump, commit or push to the branch. For the root and each subdirectory it reads the version at the landed commit (`CICD_HEAD`, else `GITHUB_SHA`, else `HEAD`) and:
+With `"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`, the bump (version file, changelog, `updates`) is part of the pull request, checked by a [`git-semver check-bump`](#git-semver-check-bump---base-rev---head-rev---fix--no-fix) job (which, with `CICD_WRITE_TOKEN` declared, pushes a missing patch bump to the pull request's branch itself, so the author need not remember it), and `release` with no subcommand, on a merge, does not bump, commit or push to the branch. For the root and each subdirectory it reads the version at the landed commit (`CICD_HEAD`, else `GITHUB_SHA`, else `HEAD`) and:
 
 | The version's tag (`vX.Y.Z` or `<subdir>/vX.Y.Z`) | What `release` does |
 |------------------------------------------------|---------------------|
@@ -510,6 +545,7 @@ Squash merges work correctly: GitHub uses the PR title as the squash commit mess
 |----------|------|-------|
 | `version-bump.yml` | `GITHUB_TOKEN` | No PAT required |
 | `install-vendored.yml` | `GITHUB_TOKEN` / `VENDOR_PAT` | `VENDOR_PAT` only needed for private vendor repos |
+| git-cicd version check job (`git-semver check-bump`, `bump_on: pull_request`) | `CICD_WRITE_TOKEN` | Optional; lets the check push the missing patch bump to the pull request branch. Needs Contents: read and write on the repository (fine-grained PAT or App token; a `GITHUB_TOKEN` push starts no workflow). Declare it with `"secrets": ["CICD_WRITE_TOKEN"]` on the job. Without it the check only fails and names the command |
 
 ## Vendor Management
 
@@ -548,11 +584,11 @@ git-semver's own pull request checks (and its release, below) run through [git-c
 |-----|-----|------|
 | `test` | `Open / Unit Tests / git-semver:test` | `ci/setup.sh` (installs the Python floor from `requires-python` in `pyproject.toml`, plus pytest, coverage and pyyaml, into a venv, and bats-core), then `ci/test.sh` (pytest under coverage, the coverage gate, then the bats tests in `tests/bats/`) |
 | `vendor-check` | `Open / Vendor Check / git-semver:vendor-check` | `.vendored/check` |
-| `version-check` | `Open / Version Check / git-semver:version-check` | `git-semver check-bump` at the repository root (pull requests into `main` only): fails when a file in `files` changed and `VERSION` was not raised |
+| `version-check` | `Open / Version Check / git-semver:version-check` | `git-semver check-bump` at the repository root (pull requests into `main` only): fails when a file in `files` changed and `VERSION` was not raised (the job does not declare `CICD_WRITE_TOKEN` yet, so the bump is not pushed for you here) |
 
 Documents and tracker records (`*.md` at the root, `docs/**`, `commands/*.md`, `LICENSE`, `.pearls` issues, archive and docs, `.madreperla/sessions.jsonl`) need no job. The result is the `Verdict / git-cicd:verdict` commit status on the pull request's head commit.
 
-The `test` job measures line coverage of the two shipped Python scripts, `git-semver` and `release`, including runs a test starts as a subprocess, prints the per-file report with missing lines, and fails when the total or either file is below 99% (`[tool.coverage.*]` in `pyproject.toml`). `install.sh` and the scripts under `ci/` are tested with bats (`tests/bats/*.bats`); each test runs the script in a sandbox whose PATH holds only stubs and a few system tools.
+The `test` job measures line coverage of the two shipped Python scripts, `git-semver` and `release`, including runs a test starts as a subprocess, prints the per-file report with missing lines, and fails when the total or either file is below 99% (`[tool.coverage.*]` in `pyproject.toml`). `install.sh` and the scripts under `ci/` are tested with bats (`tests/bats/*.bats`); each test runs the script in a sandbox whose PATH holds only stubs and a few system tools and whose runner tool cache is an empty directory, so no test depends on the Pythons the machine has.
 
 Run the same checks locally:
 
@@ -629,7 +665,7 @@ Workflows rely on commit message prefixes for loop prevention:
 
 | | git-semver | semantic-release | release-please |
 |-|-----------|-----------------|----------------|
-| Dependencies | Python 3 + git | Node.js ecosystem | GitHub-only service |
+| Dependencies | Python + git | Node.js ecosystem | GitHub-only service |
 | Config model | File patterns trigger bump | Commit conventions trigger bump | Commit conventions trigger bump |
 | Commit format | Any (doesn't parse commits) | Conventional Commits required | Conventional Commits required |
 | Changelog | Optional, from commit messages | Plugin-based | Automatic |

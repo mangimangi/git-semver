@@ -8,14 +8,17 @@ Subcommands:
     bump-all --since <commit> [opts] Check all components, bump all triggered
     tag [--push] [--subdir <name>]   Create version tags from VERSION files
     released [<ref>]                 Print the version tags at a commit (read-only)
-    check-bump [--base <rev>] [--head <rev>]
+    check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]
                                      Fail when a change touches configured files
-                                     without raising the version (read-only)
+                                     without raising the version; in fixing mode
+                                     also commit the missing patch bump and
+                                     push it with CICD_WRITE_TOKEN
 
 Config: .vendored/configs/git-semver.json (see README for schema)
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -31,6 +34,7 @@ DEFAULT_VERSION_FILE = "VERSION"
 # Keys reserved for root-level config (not subdirectory names)
 RESERVED_KEYS = frozenset({
     "version_file", "files", "updates", "changelog", "install", "bump_on",
+    "push_bump",
 })
 
 
@@ -235,14 +239,18 @@ def check_files_changed(changed_files, patterns):
 
 # ── Git helpers ─────────────────────────────────────────────────────────────
 
-def git(*args, check=True, capture=True):
-    """Run a git command and return stdout."""
+def git(*args, check=True, capture=True, env=None):
+    """Run a git command and return stdout.
+
+    `env`, when given, is the whole environment of the command.
+    """
     cmd = ["git"] + list(args)
     result = subprocess.run(
         cmd,
         capture_output=capture,
         text=True,
         check=False,
+        env=env,
     )
     if check and result.returncode != 0:
         stderr = result.stderr.strip() if capture else ""
@@ -521,17 +529,23 @@ def _try_parse_version(version_str):
 
 
 def check_bump_component(changed, base, head, effective, subdir=None):
-    """Check one component for cmd_check_bump. Returns (ok, lines)."""
+    """Check one component for cmd_check_bump.
+
+    Returns (ok, lines, fixable). `fixable` is True only when the component
+    failed because its version is unchanged from the base's, the one case
+    fixing mode raises by a patch; a version that went down, is malformed or
+    is missing is an error, never fixed.
+    """
     label = subdir or "root"
     patterns = effective.get("files")
     if not patterns:
-        return True, [f"{label}: skipped (no 'files' configured)"]
+        return True, [f"{label}: skipped (no 'files' configured)"], False
 
     version_file = get_version_file(effective)
     matches = check_files_changed(changed, patterns)
     version_file_changed = version_file in changed
     if not matches and not version_file_changed:
-        return True, [f"{label}: no configured file changed"]
+        return True, [f"{label}: no configured file changed"], False
 
     base_version = read_version_at(base, version_file)
     head_version = read_version_at(head, version_file)
@@ -541,40 +555,241 @@ def check_bump_component(changed, base, head, effective, subdir=None):
     if head_tuple is not None and (base_tuple is None or head_tuple > base_tuple):
         shown_base = base_version if base_tuple is not None else "none"
         return True, [f"{label}: version raised {shown_base} -> {head_version} "
-                      f"({version_file})"]
+                      f"({version_file})"], False
 
     if matches:
         files = ", ".join(f for f, _ in matches)
         why = f"configured files changed ({files})"
     else:
         why = f"{version_file} changed"
+    fixable = False
     if head_version is None:
         found = f"{version_file} is missing"
     elif head_tuple is None:
         found = f"{version_file} holds {head_version!r}, not a valid X.Y.Z version"
     elif head_tuple == base_tuple:
         found = f"{version_file} is still {head_version}"
+        fixable = True
     else:
         found = f"{version_file} went down to {head_version}"
-    fix = "git-semver bump patch --no-push"
-    if subdir:
-        fix += f" --subdir {subdir}"
     return False, [
         f"{label}: FAIL: {why}, but the version was not raised: {found} "
         f"(base {base} has {base_version if base_version is not None else 'no version'})",
-        f"  fix: run `{fix}` on the branch and push the commit "
+        f"  fix: run `{bump_fix_command(subdir)}` on the branch and push the commit "
         "(minor or major instead of patch are accepted too)",
-    ]
+    ], fixable
+
+
+def bump_fix_command(subdir=None):
+    """The command a person runs to make the bump check-bump asks for."""
+    fix = "git-semver bump patch --no-push"
+    if subdir:
+        fix += f" --subdir {subdir}"
+    return fix
+
+
+def resolve_fix_mode(args, config):
+    """Whether check-bump runs in fixing mode.
+
+    --fix / --no-fix win. Otherwise the `push_bump` key decides, and it only
+    applies with `"bump_on": "pull_request"`, where it defaults to true.
+    """
+    forced = getattr(args, "fix", None)
+    if forced is not None:
+        return bool(forced)
+    if config.get("bump_on") != "pull_request":
+        return False
+    return bool(config.get("push_bump", True))
+
+
+def bump_written_paths(config, subdir=None):
+    """The files bump_component writes for a component, as it will write them.
+
+    The version file always; each `updates` target that exists; the changelog
+    file when the changelog is enabled and the file exists.
+    """
+    effective = get_subdir_config(config, subdir) if subdir else config
+    paths = [get_version_file(effective)]
+    paths += [f for f in effective.get("updates", {}) if Path(f).exists()]
+    cl_enabled, cl_file, _ = parse_changelog_config(config, subdir)
+    if cl_enabled and Path(cl_file).exists():
+        paths.append(cl_file)
+    return paths
+
+
+def commit_identity_args():
+    """`-c` options naming a committer when git has none configured (CI)."""
+    if git("config", "user.email", check=False).stdout.strip():
+        return []
+    return ["-c", "user.name=git-semver",
+            "-c", "user.email=git-semver@users.noreply.github.com"]
+
+
+def fix_missing_bumps(config, base, head, fixable):
+    """Raise each fixable component by a patch and make one commit.
+
+    The commit is made on top of `head`, which must be the checked-out HEAD,
+    and holds only the files the bumps wrote. Returns (raised, sha) with
+    raised a list of (label, old, new).
+    """
+    head_sha = git("rev-parse", f"{head}^{{commit}}").stdout.strip()
+    checked_out = git("rev-parse", "HEAD").stdout.strip()
+    if head_sha != checked_out:
+        raise SemverError(
+            f"fixing mode needs the commit under test checked out: head is "
+            f"{head_sha}, HEAD is {checked_out} (check out the head, or pass "
+            "--no-fix)"
+        )
+
+    raised = []
+    paths = []
+    for subdir in fixable:
+        effective = get_subdir_config(config, subdir) if subdir else config
+        base_tuple = parse_version(read_version_at(base, get_version_file(effective)))
+        for path in bump_written_paths(config, subdir):
+            if path not in paths:
+                paths.append(path)
+        _, old, new, _ = bump_component(config, subdir=subdir, bump_type="patch")
+        assert parse_version(new) > base_tuple, (new, base_tuple)
+        raised.append((subdir or "root", old, new))
+
+    summary = ", ".join(f"{label} {old} -> {new}" for label, old, new in raised)
+    message = f"chore: bump version ({summary})"
+    git("add", "--", *paths)
+    git(*commit_identity_args(), "commit", "-m", message)
+    sha = git("rev-parse", "HEAD").stdout.strip()
+    print(f"Committed {sha}: {message}")
+    return raised, sha
+
+
+# ── Pushing the fix ─────────────────────────────────────────────────────────
+
+PUSH_REMOTE = "origin"
+TOKEN_HEADER_KEY = "http.https://github.com/.extraheader"
+
+
+def token_header(token):
+    """The extraheader value actions/checkout writes for a token."""
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return f"AUTHORIZATION: basic {basic}"
+
+
+def token_git_env(token):
+    """An environment that gives git `token` for github.com and nothing else.
+
+    The token travels as config in GIT_CONFIG_* variables, never on the
+    command line or in .git/config. The first, empty entry resets the
+    extraheader actions/checkout persisted (with GITHUB_TOKEN, whose pushes
+    start no workflow), the second adds the token's.
+    """
+    env = dict(os.environ)
+    env.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": TOKEN_HEADER_KEY,
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": TOKEN_HEADER_KEY,
+        "GIT_CONFIG_VALUE_1": token_header(token),
+    })
+    return env
+
+
+def redact(text, token):
+    """`text` with the token, its basic-auth form and its header removed."""
+    basic = token_header(token).split(" ", 2)[2]
+    for secret in (basic, token):
+        text = text.replace(secret, "***")
+    return text
+
+
+def is_release_branch(branch, target):
+    """The branches that are released from: the target, main and master."""
+    return branch in {target, "main", "master"}
+
+
+def push_refusal(token, source, target, head_sha, env):
+    """Why the fix commit may not be pushed to `source`, or None."""
+    if not token:
+        return "no CICD_WRITE_TOKEN: declare it on the version check job"
+    if not source:
+        return ("source branch unknown: pass --source-branch or set "
+                "CICD_SOURCE_BRANCH")
+    if source == target:
+        return f"source branch {source} is the target branch"
+    if is_release_branch(source, target):
+        return f"source branch {source} is a release branch"
+    result = git("ls-remote", "--heads", PUSH_REMOTE, f"refs/heads/{source}",
+                 check=False, env=env)
+    if result.returncode != 0:
+        return (f"cannot read {PUSH_REMOTE}: "
+                f"{redact(result.stderr.strip(), token)}")
+    remote_sha = result.stdout.split("\t", 1)[0].strip()
+    if not remote_sha:
+        return (f"branch {source} is not on {PUSH_REMOTE} (a fork's branch "
+                "is not pushed to)")
+    if remote_sha != head_sha:
+        return f"branch {source} moved on from {head_sha} (now {remote_sha})"
+    return None
+
+
+def push_fix(raised, sha, head_sha, args):
+    """Push the fix commit to the pull request's source branch, if allowed.
+
+    Prints what happened; the token never appears in the output. Returns
+    True when pushed.
+    """
+    token = os.environ.get("CICD_WRITE_TOKEN", "")
+    source = (getattr(args, "source_branch", None)
+              or os.environ.get("CICD_SOURCE_BRANCH", ""))
+    target = (getattr(args, "target_branch", None)
+              or os.environ.get("CICD_TARGET_BRANCH", ""))
+    env = token_git_env(token) if token else None
+
+    reason = push_refusal(token, source, target, head_sha, env)
+    if reason is None:
+        result = git("push", PUSH_REMOTE, f"HEAD:refs/heads/{source}",
+                     check=False, env=env)
+        if result.returncode == 0:
+            print(f"Pushed {sha} to {source}")
+            print(f"The pushed commit {sha} starts its own run; wait for "
+                  "that one")
+            return True
+        output = (result.stderr.strip() or result.stdout.strip())
+        reason = f"git push failed: {redact(output, token)}"
+
+    print(f"Not pushing the bump: {reason}")
+    for label, _, _ in raised:
+        command = bump_fix_command(None if label == "root" else label)
+        print(f"  fix: run `{command}` on the branch and push the commit")
+    return False
 
 
 def cmd_check_bump(args):
     """Fail when the change under test touches configured files without
-    raising the version.
+    raising the version; in fixing mode, also make the missing bump.
 
     Compares `head` with `base` (--base/--head, else CICD_BASE/CICD_HEAD;
     head defaults to HEAD) for the root and every subdirectory component.
-    Read-only and local: needs no token or network and writes nothing.
-    Returns 0 when every component passes, 1 otherwise.
+    The check itself is local and needs no token or network.
+
+    Fixing mode (--fix/--no-fix, else `push_bump`, default on with
+    `"bump_on": "pull_request"`): when every failing component failed only
+    because its version equals the base's, each is raised by a patch the
+    way `bump` does it and one commit is made on top of the checked-out
+    head. A component already raised by any amount is left alone. A version
+    that went down, is malformed or is missing is an error and no commit is
+    made at all.
+
+    The fix commit is then pushed to the pull request's source branch
+    (--source-branch/--target-branch, else CICD_SOURCE_BRANCH/
+    CICD_TARGET_BRANCH) with CICD_WRITE_TOKEN, never forced. It is not
+    pushed, with a reason and the command to run, when there is no token,
+    no source branch, or the source branch is the target or a release
+    branch, is not on origin (a fork) or moved on from the head.
+
+    Returns 0 when every component passes, 1 otherwise (including when a
+    fix commit was made or pushed: the commit under test still lacked the
+    bump, and the pushed commit's own run is the one that can pass).
     """
     config = load_config(args.config)
     base = getattr(args, "base", None) or os.environ.get("CICD_BASE", "")
@@ -589,12 +804,34 @@ def cmd_check_bump(args):
     changed = get_changed_files_between(base, head)
     components = [(None, config)] + list(get_subdirectories(config).items())
     ok = True
+    fixable = []
+    unfixable = []
     for subdir, effective in components:
-        passed, lines = check_bump_component(changed, base, head, effective, subdir)
+        passed, lines, can_fix = check_bump_component(
+            changed, base, head, effective, subdir)
         ok = ok and passed
+        if not passed:
+            (fixable if can_fix else unfixable).append(subdir)
         for line in lines:
             print(line)
-    return 0 if ok else 1
+    if ok:
+        return 0
+    if not resolve_fix_mode(args, config):
+        return 1
+    if unfixable:
+        names = ", ".join(s or "root" for s in unfixable)
+        print(f"Not fixing: the version of {names} went down, is malformed "
+              "or is missing; fix it by hand")
+        return 1
+
+    head_sha = git("rev-parse", f"{head}^{{commit}}").stdout.strip()
+    raised, sha = fix_missing_bumps(config, base, head, fixable)
+    for label, old, new in raised:
+        print(f"Raised {label}: {old} -> {new}")
+    print(f"Made commit {sha} with the missing bump; the commit under test "
+          "still lacked it")
+    push_fix(raised, sha, head_sha, args)
+    return 1
 
 
 def cmd_bump(args):
@@ -870,6 +1107,25 @@ def build_parser():
     check_bump_parser.add_argument(
         "--head", default=None,
         help="Commit under test (default: $CICD_HEAD, else HEAD)",
+    )
+    fix_group = check_bump_parser.add_mutually_exclusive_group()
+    fix_group.add_argument(
+        "--fix", dest="fix", action="store_true", default=None,
+        help="Raise a missing version by a patch and commit it (default: "
+             "push_bump, on with bump_on pull_request)",
+    )
+    fix_group.add_argument(
+        "--no-fix", dest="fix", action="store_false",
+        help="Check only: never commit a bump",
+    )
+    check_bump_parser.add_argument(
+        "--source-branch", default=None,
+        help="Pull request branch the fix is pushed to "
+             "(default: $CICD_SOURCE_BRANCH)",
+    )
+    check_bump_parser.add_argument(
+        "--target-branch", default=None,
+        help="Branch the pull request goes into (default: $CICD_TARGET_BRANCH)",
     )
 
     return parser
