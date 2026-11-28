@@ -1,4 +1,29 @@
 {
-  "jobs": {},
-  "needs_nothing": []
+  "jobs": {
+    "test": {
+      "name": "Unit Tests",
+      "on": ["open"],
+      "branches": ["**"],
+      "paths": ["git-semver", "release", "install.sh", "templates/**", "tests/**", "pyproject.toml", "ci/**"],
+      "setup": "ci/setup.sh",
+      "steps": ["ci/test.sh"]
+    },
+    "vendor-check": {
+      "name": "Vendor Check",
+      "on": ["open"],
+      "branches": ["**"],
+      "paths": ["**"],
+      "steps": [".vendored/check"]
+    }
+  },
+  "needs_nothing": [
+    "*.md",
+    "LICENSE",
+    "docs/**",
+    "commands/*.md",
+    ".pearls/issues.jsonl",
+    ".pearls/archive/**",
+    ".pearls/docs/**",
+    ".madreperla/sessions.jsonl"
+  ]
 }

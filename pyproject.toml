@@ -1,3 +1,10 @@
+[project]
+name = "git-semver"
+description = "Config-driven semantic versioning for git repos"
+requires-python = ">=3.10"
+dependencies = []
+dynamic = ["version"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
