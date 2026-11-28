@@ -50,9 +50,12 @@ status=0
     status=1
 }
 for file in "${COVERED[@]}"; do
+    total=""
     if ! total="$("$PYTHON" -m coverage report --include="$file" --format=total \
             --fail-under="$MIN_COVERAGE")"; then
-        echo "ci/test.sh: $file is at ${total:-no}% line coverage, below $MIN_COVERAGE%" >&2
+        # The figure is the first line; coverage adds its own failure line.
+        figure="${total%%$'\n'*}"
+        echo "ci/test.sh: $file is at ${figure:-no}% line coverage, below $MIN_COVERAGE%" >&2
         status=1
     fi
 done

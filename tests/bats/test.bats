@@ -14,7 +14,11 @@ case "$*" in
     "-m coverage report --fail-under=99") [ -z "${FAIL_TOTAL:-}" ] || exit 2 ;;
     "-m coverage report --include="*)
         file="${4#--include=}"
-        if [ "$file" = "${FAIL_FILE:-}" ]; then echo 95.0; exit 2; fi
+        if [ "$file" = "${FAIL_FILE:-}" ]; then
+            echo 95.0
+            echo "Coverage failure: total of 95.0 is less than fail-under=99.0"
+            exit 2
+        fi
         echo 100.0 ;;
 esac
 exit 0'
@@ -62,6 +66,7 @@ setup() {
     run bash "$ROOT/ci/test.sh"
     [ "$status" -eq 1 ]
     [[ "$output" == *"ci/test.sh: release is at 95.0% line coverage, below 99%"* ]]
+    [[ "$output" != *"fail-under=99.0% line"* ]]
     [[ "$output" != *"git-semver is at"* ]]
 }
 
