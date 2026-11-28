@@ -78,7 +78,7 @@ printf "GH_TOKEN=%s\n" "$GH_TOKEN"'
     [[ "$output" == *"GH_TOKEN=gt"* ]]
 }
 
-@test "GH_TOKEN is empty without either token" {
+@test "GH_TOKEN is empty without any token" {
     run bash "$ROOT/ci/update-vendored.sh"
     [[ "$output" == *"GH_TOKEN="$'\n'* || "$output" == *"GH_TOKEN=" ]]
 }
