@@ -6,7 +6,7 @@
 # GitHub event, permissions and overlap rule:
 #
 #   open    Open    .github/workflows/git-cicd-open.yml    (generated)
-#   merge   Merge   .github/workflows/git-cicd-merge.yml   (generated)
+#   merge   Merge   .github/workflows/git-cicd-merge.yml   (generated when a job has merge in on)
 #   cron    Cron    .github/workflows/git-cicd-cron.yml    (generated when a job has cron in on)
 #   manual  Manual  .github/workflows/git-cicd-manual.yml  (generated)
 #
@@ -24,10 +24,16 @@
 # job allows manual runs this file is not generated (generate removes it).
 #
 # Event: `workflow_dispatch` with a form generated from the config: `job`, a
-# dropdown of the jobs that allow manual runs, in config order, run on the
-# branch the run is started on; then one named field per distinct declared
-# input of those jobs (its description, default and, for choices, a
-# dropdown), shared by jobs declaring the same name. Names in the form are
+# dropdown of the jobs that allow manual runs, in config order, each shown by
+# its row name `<name> / <repo>:<job>` exactly as a pull request's checks show
+# it, run on the branch the run is started on (the tool maps the option back
+# to the job, and still takes the bare config key); then one named field per
+# distinct declared input of those jobs (its description, default and, for
+# choices, a dropdown), shared by jobs declaring the same name, whose
+# description names the jobs using it by their row names when not every job
+# does. The repository's name in the form is the config's `repository`, else
+# the last part of the `origin` remote's URL, else the checkout's directory
+# name; it never comes from the environment. Names in the form are
 # validated identifiers; descriptions, defaults and options are JSON strings,
 # and `${{` in them is refused by validate. The input fields are optional in
 # the form, since it shows every job's fields; the tool enforces `required`
@@ -111,20 +117,20 @@ on:
         required: true
         type: choice
         options:
-          - "release"
-          - "update-vendored"
+          - "Release / git-semver:release"
+          - "Install Vendored / git-semver:update-vendored"
       vendor:
-        description: "Vendor to update (or all) (job update-vendored)"
+        description: "Vendor to update (or all) (Install Vendored / git-semver:update-vendored)"
         required: false
         default: "all"
         type: string
       version:
-        description: "Version to install (default: latest) (job update-vendored)"
+        description: "Version to install (default: latest) (Install Vendored / git-semver:update-vendored)"
         required: false
         default: "latest"
         type: string
       private:
-        description: "Vendor repo is private (only needed when adding a new vendor) (job update-vendored)"
+        description: "Vendor repo is private (only needed when adding a new vendor) (Install Vendored / git-semver:update-vendored)"
         required: false
         default: "false"
         type: choice

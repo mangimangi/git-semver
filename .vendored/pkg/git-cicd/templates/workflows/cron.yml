@@ -6,7 +6,7 @@
 # overlap rule:
 #
 #   open    Open    .github/workflows/git-cicd-open.yml    (generated)
-#   merge   Merge   .github/workflows/git-cicd-merge.yml   (generated)
+#   merge   Merge   .github/workflows/git-cicd-merge.yml   (generated when a job has merge in on)
 #   cron    Cron    .github/workflows/git-cicd-cron.yml    (generated when a job has cron in on)
 #   manual  Manual  .github/workflows/git-cicd-manual.yml  (generated)
 #
