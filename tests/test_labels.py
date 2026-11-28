@@ -2,6 +2,9 @@
 
 import json
 import re
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -209,3 +212,250 @@ class TestVersionTags:
         assert "templates/labels.schema" in config["files"]
         schema = json.loads((ROOT / "templates/labels.schema").read_text())
         assert schema["properties"]["format"]["const"] == 1
+
+
+# ── label / unlabel / labels (real local repositories) ──────────────────────
+
+
+def g(repo, *args):
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def today():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    """A repository with v0.1.2, v0.1.3, v0.2.0 and backend/v1.0.0 tagged,
+    run from a subdirectory to show the file goes to the root."""
+    g(tmp_path, "init", "-q", "-b", "main")
+    shas = {}
+    for tag in ["v0.1.2", "v0.1.3", "backend/v1.0.0", "backend/v1.1.0", "v0.2.0"]:
+        g(tmp_path, "commit", "-q", "--allow-empty", "-m", tag)
+        g(tmp_path, "tag", "-a", tag, "-m", tag)
+        shas[tag] = g(tmp_path, "rev-parse", "HEAD")
+    g(tmp_path, "commit", "-q", "--allow-empty", "-m", "untagged")
+    (tmp_path / "sub").mkdir()
+    monkeypatch.chdir(tmp_path / "sub")
+    return tmp_path, shas
+
+
+def cli(monkeypatch, *argv):
+    """Run git-semver's main() with argv; returns the exit code."""
+    monkeypatch.setattr(sys, "argv", ["git-semver", *argv])
+    try:
+        git_semver.main()
+    except SystemExit as e:
+        return e.code
+    return 0
+
+
+def state(root):
+    return (g(root, "log", "--all", "--format=%H"), g(root, "tag", "-l"),
+            g(root, "status", "--porcelain", "--untracked-files=no"))
+
+
+def read_file(root):
+    return json.loads((root / git_semver.LABELS_FILE).read_text())
+
+
+class TestLabelCommand:
+    def test_labels_tagged_version(self, repo, monkeypatch, capsys):
+        root, shas = repo
+        before = state(root)
+        assert cli(monkeypatch, "label", "0.1.2", "defect",
+                   "--reason", "init fails") == 0
+        out = capsys.readouterr().out
+        assert "Labelled v0.1.2 defect" in out
+        assert "pull request" in out
+        assert read_file(root) == {"format": 1, "versions": {"v0.1.2": [{
+            "name": "defect", "reason": "init fails", "date": today(),
+            "commit": shas["v0.1.2"]}]}}
+        # No commit, tag or push; only the untracked file appears.
+        assert state(root) == before
+
+    def test_v_prefix_and_fixed_in(self, repo, monkeypatch):
+        root, shas = repo
+        assert cli(monkeypatch, "label", "v0.1.2", "defect", "--reason", "r",
+                   "--fixed-in", "v0.1.3") == 0
+        assert read_file(root)["versions"]["v0.1.2"][0]["fixed_in"] == "0.1.3"
+
+    def test_subdir(self, repo, monkeypatch):
+        root, shas = repo
+        assert cli(monkeypatch, "label", "1.0.0", "defect", "--reason", "r",
+                   "--fixed-in", "1.1.0", "--subdir", "backend") == 0
+        lb = read_file(root)["versions"]["backend/v1.0.0"][0]
+        assert lb["commit"] == shas["backend/v1.0.0"]
+        assert lb["fixed_in"] == "1.1.0"
+
+    @pytest.mark.parametrize("argv, message", [
+        (["9.9.9", "defect", "--reason", "r"], "no tag v9.9.9: only a released"),
+        (["1.0.0", "defect", "--reason", "r"], "no tag v1.0.0"),
+        (["0.1.2", "defect"], "needs --reason"),
+        (["0.1.2", "defect", "--reason", "  "], "needs --reason"),
+        (["0.1.2", "defect", "--reason", "a\nb"], "--reason must be one line"),
+        (["0.1.2", "eol", "--reason", "r"], "makes only the 'defect' label, not 'eol'"),
+        (["0.1.2", "defect", "--reason", "r", "--fixed-in", "0.1.9"],
+         "--fixed-in 0.1.9: no tag v0.1.9"),
+        (["0.1.3", "defect", "--reason", "r", "--fixed-in", "0.1.3"],
+         "--fixed-in 0.1.3 is not higher than the labelled 0.1.3"),
+        (["0.1.3", "defect", "--reason", "r", "--fixed-in", "0.1.2"],
+         "is not higher"),
+        (["0.1.2", "defect", "--reason", "r", "--fixed-in", "1.0.0"],
+         "no tag v1.0.0"),
+        (["not-a-version", "defect", "--reason", "r"], "Invalid version format"),
+    ])
+    def test_refused(self, repo, monkeypatch, capsys, argv, message):
+        root, _ = repo
+        assert cli(monkeypatch, "label", *argv) == 1
+        assert message in capsys.readouterr().err
+        assert not (root / git_semver.LABELS_FILE).exists()
+
+    def test_relabel_updates_without_duplicating(self, repo, monkeypatch, capsys):
+        root, shas = repo
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "first",
+            "--fixed-in", "0.1.3")
+        data = read_file(root)
+        data["versions"]["v0.1.2"][0]["date"] = "2026-01-01"
+        data["versions"]["v0.1.2"][0]["extra"] = "kept"
+        (root / git_semver.LABELS_FILE).write_text(json.dumps(data))
+        capsys.readouterr()
+        assert cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "second") == 0
+        assert "Updated defect on v0.1.2" in capsys.readouterr().out
+        labels = read_file(root)["versions"]["v0.1.2"]
+        assert labels == [{"name": "defect", "reason": "second",
+                           "date": "2026-01-01", "commit": shas["v0.1.2"],
+                           "fixed_in": "0.1.3", "extra": "kept"}]
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "third",
+            "--fixed-in", "0.2.0")
+        assert read_file(root)["versions"]["v0.1.2"][0]["fixed_in"] == "0.2.0"
+
+    def test_malformed_file_refused(self, repo, monkeypatch, capsys):
+        root, _ = repo
+        (root / git_semver.LABELS_FILE).write_text('{"format": 2, "versions": {}}')
+        assert cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "r") == 1
+        assert "format 2 is not supported" in capsys.readouterr().err
+
+
+class TestUnlabelCommand:
+    def test_restores_pre_existing_file_byte_identically(self, repo, monkeypatch, capsys):
+        root, shas = repo
+        lb = label(name="eol", commit=shas["v0.1.3"], vendor_note="x")
+        text = git_semver.dump_labels(git_semver.parse_labels(
+            file_text({"v0.1.3": [lb]}, publisher="p")))
+        path = root / git_semver.LABELS_FILE
+        path.write_text(text)
+        cli(monkeypatch, "label", "0.1.3", "defect", "--reason", "r")
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "r")
+        assert cli(monkeypatch, "unlabel", "0.1.2", "defect") == 0
+        assert cli(monkeypatch, "unlabel", "v0.1.3", "defect") == 0
+        assert "Removed defect from v0.1.3" in capsys.readouterr().out
+        assert path.read_text() == text
+
+    def test_deletes_file_label_created(self, repo, monkeypatch):
+        root, _ = repo
+        before = state(root)
+        cli(monkeypatch, "label", "1.0.0", "defect", "--reason", "r",
+            "--subdir", "backend")
+        assert cli(monkeypatch, "unlabel", "1.0.0", "defect",
+                   "--subdir", "backend") == 0
+        assert not (root / git_semver.LABELS_FILE).exists()
+        assert state(root) == before
+
+    def test_keeps_file_with_unknown_top_level_key(self, repo, monkeypatch):
+        root, _ = repo
+        path = root / git_semver.LABELS_FILE
+        path.write_text(file_text({}, publisher="p"))
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "r")
+        cli(monkeypatch, "unlabel", "0.1.2", "defect")
+        assert json.loads(path.read_text()) == {
+            "format": 1, "versions": {}, "publisher": "p"}
+
+    def test_missing_label_says_so_exit_0(self, repo, monkeypatch, capsys):
+        root, _ = repo
+        assert cli(monkeypatch, "unlabel", "0.1.2", "defect") == 0
+        assert "No defect label on v0.1.2" in capsys.readouterr().out
+        assert not (root / git_semver.LABELS_FILE).exists()
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "r")
+        assert cli(monkeypatch, "unlabel", "0.1.2", "eol") == 0
+        assert "No eol label on v0.1.2" in capsys.readouterr().out
+
+    def test_unknown_name_untagged_version(self, repo, monkeypatch):
+        root, shas = repo
+        path = root / git_semver.LABELS_FILE
+        path.write_text(file_text({"v5.0.0": [label(name="eol")],
+                                   "v0.1.2": [label(name="eol")]}))
+        assert cli(monkeypatch, "unlabel", "5.0.0", "eol") == 0
+        assert list(read_file(root)["versions"]) == ["v0.1.2"]
+
+
+class TestLabelsCommand:
+    @pytest.fixture
+    def labelled(self, repo, monkeypatch, capsys):
+        root, shas = repo
+        cli(monkeypatch, "label", "0.1.3", "defect", "--reason", "late",
+            "--fixed-in", "0.2.0")
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "early")
+        cli(monkeypatch, "label", "1.0.0", "defect", "--reason", "api",
+            "--subdir", "backend")
+        data = read_file(root)
+        data["versions"]["v0.1.2"].append(
+            {"name": "eol", "date": "2026-01-01", "commit": shas["v0.1.2"]})
+        (root / git_semver.LABELS_FILE).write_text(json.dumps(data))
+        capsys.readouterr()
+        return root, shas
+
+    def test_human_all(self, labelled, monkeypatch, capsys):
+        root, shas = labelled
+        assert cli(monkeypatch, "labels") == 0
+        d = today()
+        assert capsys.readouterr().out.splitlines() == [
+            f"v0.1.2  defect  {d}  {shas['v0.1.2'][:7]}  — early",
+            f"v0.1.2  eol  2026-01-01  {shas['v0.1.2'][:7]}",
+            f"v0.1.3  defect  {d}  {shas['v0.1.3'][:7]}  fixed in 0.2.0  — late",
+            f"backend/v1.0.0  defect  {d}  {shas['backend/v1.0.0'][:7]}  — api",
+        ]
+
+    def test_filter_version(self, labelled, monkeypatch, capsys):
+        assert cli(monkeypatch, "labels", "v0.1.3") == 0
+        out = capsys.readouterr().out.splitlines()
+        assert len(out) == 1 and out[0].startswith("v0.1.3  defect")
+        assert cli(monkeypatch, "labels", "1.0.0", "--subdir", "backend") == 0
+        assert capsys.readouterr().out.startswith("backend/v1.0.0  defect")
+
+    def test_filter_component(self, labelled, monkeypatch, capsys):
+        assert cli(monkeypatch, "labels", "--subdir", "backend") == 0
+        out = capsys.readouterr().out.splitlines()
+        assert [line.split()[0] for line in out] == ["backend/v1.0.0"]
+
+    def test_json(self, labelled, monkeypatch, capsys):
+        root, _ = labelled
+        assert cli(monkeypatch, "labels", "--json") == 0
+        out = capsys.readouterr().out
+        assert out == git_semver.dump_labels(git_semver.load_labels(
+            root / git_semver.LABELS_FILE))
+        assert cli(monkeypatch, "labels", "0.1.3", "--json") == 0
+        assert list(json.loads(capsys.readouterr().out)["versions"]) == ["v0.1.3"]
+
+    def test_nothing_when_empty(self, repo, monkeypatch, capsys):
+        assert cli(monkeypatch, "labels") == 0
+        assert cli(monkeypatch, "labels", "0.1.2") == 0
+        assert capsys.readouterr().out == ""
+
+    def test_malformed_file_is_error(self, repo, monkeypatch, capsys):
+        root, _ = repo
+        (root / git_semver.LABELS_FILE).write_text("[]")
+        assert cli(monkeypatch, "labels") == 1
+        assert "the top level must be an object" in capsys.readouterr().err
+
+    def test_no_command_commits_tags_or_pushes(self, labelled, monkeypatch):
+        root, _ = labelled
+        before = state(root)
+        cli(monkeypatch, "labels", "--json")
+        cli(monkeypatch, "unlabel", "0.1.2", "eol")
+        cli(monkeypatch, "label", "0.1.2", "defect", "--reason", "again")
+        assert state(root) == before

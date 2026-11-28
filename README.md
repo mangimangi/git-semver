@@ -91,6 +91,9 @@ git-semver bump [patch|minor|major] [opts]            # Bump version, commit, ta
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
 git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
 git-semver released [<ref>]                           # Print the version tags released at a commit
+git-semver label <version> defect --reason "..."      # Label a released version in git-deps.labels.json
+git-semver unlabel <version> <name>                   # Withdraw a label
+git-semver labels [<version>] [--json]                # List labels
 git-semver check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]  # Fail when configured files changed but the version was not raised; in fixing mode push the patch bump
 ```
 
@@ -162,6 +165,59 @@ Read-only and local: it reads only the repository's tags, so it needs no config 
 git-semver released              # e.g. v1.4.0
 git-semver released "$CICD_HEAD" # ask about a specific commit
 ```
+
+### `git-semver label <version> defect --reason "..." [--fixed-in <version>]`
+
+Labels a released version `defect` in [`git-deps.labels.json`](#labels-git-depslabelsjson) at the root of the working tree. `<version>` is `X.Y.Z` or `vX.Y.Z`; the label goes on its tag (`vX.Y.Z`, or `<subdir>/vX.Y.Z` with `--subdir`).
+
+- The version must be released: its tag must exist (`git rev-parse --verify refs/tags/<tag>^{commit}`), or it fails naming the tag. The label records the commit the tag points at as `commit`, and today's UTC date as `date`.
+- `defect` is the only label git-semver makes; any other name is refused. Labels of other names already in the file are kept and can be removed with `unlabel`.
+- `--reason` is required: one line, not empty.
+- `--fixed-in` names the version that fixes it. It must be a tagged version of the same component and strictly higher than the labelled one; otherwise it fails saying why.
+- Labelling a version that already has the label updates its `reason` (and `fixed_in`, when given; omitting `--fixed-in` keeps the old one) without adding a second one. The original `date` and `commit` are kept: they say when the label was made and what the tag pointed at then. Unknown fields on the label are kept.
+
+| Flag | Behavior |
+|------|----------|
+| `--reason "..."` | Why, in one line. Required |
+| `--fixed-in <version>` | The tagged, higher version that fixes it |
+| `--subdir <name>` | Label a subdirectory component's version (`<subdir>/vX.Y.Z`) |
+
+It prints what it did (`Labelled v0.1.2 defect ...` or `Updated defect on v0.1.2 ...`) and reminds you to commit the file. `label`, `unlabel` and `labels` change or read only `git-deps.labels.json` in the working tree: they never commit, tag or push, read no config file, and need no token and no network. The change reaches the default branch as any other change does (see [Labelling a release](#labelling-a-release)).
+
+### `git-semver unlabel <version> <name>`
+
+Removes the label `<name>` from a version. Any name can be removed, including one git-semver does not make, and the version's tag need not exist. A version left with no labels is dropped from the file, and a file left with nothing in it is deleted, so `label` followed by `unlabel` leaves the working tree as it was. When the version has no such label it says so (`No defect label on v0.1.2`) and exits 0. `--subdir <name>` removes it from `<subdir>/vX.Y.Z`.
+
+### `git-semver labels [<version>] [--json]`
+
+Lists the labels, one line per label in the file's order, unknown names included:
+
+```
+v0.1.2  defect  2026-11-28  455ee13  fixed in 0.1.3  — medici init fails on a fresh checkout
+```
+
+With `<version>` it lists that version's labels only; with `--subdir <name>` and no version, that component's. `--json` prints the (filtered) content as JSON in the canonical form git-semver writes. It prints nothing (exit 0) when there are none; a malformed file is an error with the reader's message.
+
+| Flag | Behavior |
+|------|----------|
+| `<version>` | Only this version (`X.Y.Z` or `vX.Y.Z`) |
+| `--subdir <name>` | A subdirectory component's versions |
+| `--json` | Print JSON instead of lines |
+
+### Labelling a release
+
+For a repository whose default branch is protected, a label reaches it through a pull request like any other change:
+
+```bash
+git switch -c label-v0.1.2
+git-semver label 0.1.2 defect --reason "medici init fails on a fresh checkout" --fixed-in 0.1.3
+git add git-deps.labels.json
+git commit -m "label v0.1.2 defect"
+git push -u origin label-v0.1.2
+gh pr create --fill     # or open the pull request in the browser; merge it when it passes
+```
+
+`git-deps.labels.json` is not one of the configured `files`, so labelling does not ask for a version bump (`check-bump` does not fire on it). Withdraw a label the same way with `git-semver unlabel 0.1.2 defect`.
 
 ### Labels (`git-deps.labels.json`)
 
