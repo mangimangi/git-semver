@@ -20,6 +20,19 @@ def _make_result(stdout="", stderr="", returncode=0):
     return r
 
 
+@pytest.fixture(autouse=True)
+def default_bump_on(tmp_path, monkeypatch):
+    """Keep these tests on the default bump-on-merge path.
+
+    release reads "bump_on" from git-semver's config relative to the working
+    directory, which for these tests is this repository, whose own config
+    selects "pull_request". Point it at a missing file so the tests exercise
+    the default, as a repository without the setting would.
+    """
+    monkeypatch.setattr(bar, "SEMVER_CONFIG_PATH",
+                        str(tmp_path / "no-git-semver-config.json"))
+
+
 @pytest.fixture
 def mock_run(monkeypatch):
     """Replace semver_script.run with a recorder.
