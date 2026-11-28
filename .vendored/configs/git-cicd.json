@@ -51,7 +51,7 @@
           "default": "latest"
         },
         "private": {
-          "description": "Vendor repo is private (needs CICD_WRITE_TOKEN with read access to it)",
+          "description": "Vendor repo is private (only needed when adding a new vendor)",
           "choices": ["true", "false"],
           "default": "false"
         }
