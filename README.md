@@ -315,6 +315,30 @@ Runs when a `chore: bump version` commit lands on main (either direct push or me
 
 The bump and publish jobs never run together — their `if` conditions are mutually exclusive.
 
+### `release` with no subcommand
+
+`release` can also be called with no subcommand. It then works out for itself which case the run is in and does it, so the bump-or-publish decision needs no workflow `if` conditions and no per-repo wrapper script:
+
+| Run | Landed commit's subject | What `release` does |
+|-----|-------------------------|---------------------|
+| merge (a change landed on a branch) | starts with `chore: bump version` | publish: `git-semver tag --push` and a GitHub Release per version tag (as `release publish`) |
+| merge | starts with `chore: install` | nothing, exit 0 |
+| merge | anything else | bump, as `release bump` on push: honours `on_merge` and `automerge`, falls back to a PR on a protected branch, and tags and releases in the same run when the direct push worked |
+| manual (started by hand) | — | bump, as `release bump` on `workflow_dispatch`, with `bump_type` (default `patch`), `subdirectory` and `changelog_description` |
+| any other trigger (`open`, `cron`, another GitHub event, or none) | — | refused with a reason, non-zero exit |
+
+It reads the run from git-cicd's variables when they are set and from the GitHub Actions variables otherwise; whenever both are set (a git-cicd job on Actions), git-cicd's win:
+
+| git-cicd | GitHub Actions | Meaning |
+|----------|----------------|---------|
+| `CICD_TRIGGER` (`merge`, `manual`) | `GITHUB_EVENT_NAME` (`push`, `workflow_dispatch`) | Which case |
+| `CICD_BASE` | `GITHUB_EVENT_BEFORE` | Commit before the push (what `bump-all --since` diffs against) |
+| `CICD_HEAD` | `GITHUB_SHA` (else `HEAD`) | Landed commit whose subject is tested |
+| `CICD_TARGET_BRANCH` | `GITHUB_REF` | Branch fast-forwarded to before bumping or tagging |
+| `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY`, `CICD_INPUT_CHANGELOG_DESCRIPTION` | `INPUT_BUMP_TYPE`, `INPUT_SUBDIRECTORY`, `INPUT_CHANGELOG_DESCRIPTION` | Manual-run inputs |
+
+`gh` reads its token from `GH_TOKEN` or `GITHUB_TOKEN` (git-cicd's merge and manual workflows pass `GITHUB_TOKEN`). `release bump` and `release publish` are unchanged; `version-bump.yml` keeps calling them.
+
 ### Protected Branch Support
 
 Protected branches work automatically with no configuration changes. The flow adapts based on whether `git push` succeeds:
