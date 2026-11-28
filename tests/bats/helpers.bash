@@ -5,8 +5,10 @@
 # BATS_TEST_TMPDIR, and a PATH made of two directories only - $STUBS (fake
 # commands a test writes with `stub`) and $SYSBIN (links to the few real tools
 # the scripts use). Nothing else on the machine (python, uv, git, gh, curl,
-# bats) is visible unless a test stubs it, so every case is decided by the
-# test, not by what the runner happens to have installed.
+# bats) is visible unless a test stubs it, and the runner tool cache
+# (RUNNER_TOOL_CACHE, which ci/setup.sh otherwise reads from
+# /opt/hostedtoolcache) is an empty directory of the test's own, so every case
+# is decided by the test, not by what the runner happens to have installed.
 
 ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
 
@@ -38,7 +40,10 @@ sandbox() {
     mkdir -p "$HOME"
     # The token guard: no test sees a real token (TOKENS, below).
     unset "${TOKENS[@]}"
-    unset CI RUNNER_TOOL_CACHE \
+    # The runner's tool cache holds real Pythons: point it at an empty one.
+    export RUNNER_TOOL_CACHE="$BATS_TEST_TMPDIR/toolcache"
+    mkdir -p "$RUNNER_TOOL_CACHE"
+    unset CI \
           VENDOR_REF VENDOR_REPO VENDOR_INSTALL_DIR VENDOR_MANIFEST \
           CICD_INPUT_VENDOR CICD_INPUT_VERSION CICD_INPUT_PRIVATE
     cd "$WORK"
@@ -80,10 +85,10 @@ not_logged() {
     fi
 }
 
-# write_pyproject [FLOOR] - a pyproject.toml naming FLOOR (default 3.10) as
+# write_pyproject [FLOOR] - a pyproject.toml naming FLOOR (default 3.11) as
 # the requires-python floor; with FLOOR "none", one without requires-python.
 write_pyproject() {
-    local floor="${1:-3.10}"
+    local floor="${1:-3.11}"
     if [ "$floor" = none ]; then
         printf '[project]\nname = "x"\n' > pyproject.toml
     else

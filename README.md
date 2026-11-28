@@ -1,6 +1,6 @@
 # git-semver
 
-Config-driven semantic versioning for git repos. Declare which files matter, get automatic patch bumps on merge. Zero dependencies beyond Python 3 and git.
+Config-driven semantic versioning for git repos. Declare which files matter, get automatic patch bumps on merge. Zero dependencies beyond Python 3.11 or later and git.
 
 ## Features
 
@@ -13,7 +13,7 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 - **Protected branch support** — auto-detects branch protection and falls back to PR mode
 - **Changelog generation** — from commit messages, with configurable noise filters
 - **No PAT required** — core versioning uses `GITHUB_TOKEN`
-- **CI-agnostic core** — the script works anywhere git and Python 3 are available
+- **CI-agnostic core** — the script works anywhere git and Python are available
 
 ## Installation
 
@@ -588,7 +588,7 @@ git-semver's own pull request checks (and its release, below) run through [git-c
 
 Documents and tracker records (`*.md` at the root, `docs/**`, `commands/*.md`, `LICENSE`, `.pearls` issues, archive and docs, `.madreperla/sessions.jsonl`) need no job. The result is the `Verdict / git-cicd:verdict` commit status on the pull request's head commit.
 
-The `test` job measures line coverage of the two shipped Python scripts, `git-semver` and `release`, including runs a test starts as a subprocess, prints the per-file report with missing lines, and fails when the total or either file is below 99% (`[tool.coverage.*]` in `pyproject.toml`). `install.sh` and the scripts under `ci/` are tested with bats (`tests/bats/*.bats`); each test runs the script in a sandbox whose PATH holds only stubs and a few system tools.
+The `test` job measures line coverage of the two shipped Python scripts, `git-semver` and `release`, including runs a test starts as a subprocess, prints the per-file report with missing lines, and fails when the total or either file is below 99% (`[tool.coverage.*]` in `pyproject.toml`). `install.sh` and the scripts under `ci/` are tested with bats (`tests/bats/*.bats`); each test runs the script in a sandbox whose PATH holds only stubs and a few system tools and whose runner tool cache is an empty directory, so no test depends on the Pythons the machine has.
 
 Run the same checks locally:
 
@@ -665,7 +665,7 @@ Workflows rely on commit message prefixes for loop prevention:
 
 | | git-semver | semantic-release | release-please |
 |-|-----------|-----------------|----------------|
-| Dependencies | Python 3 + git | Node.js ecosystem | GitHub-only service |
+| Dependencies | Python + git | Node.js ecosystem | GitHub-only service |
 | Config model | File patterns trigger bump | Commit conventions trigger bump | Commit conventions trigger bump |
 | Commit format | Any (doesn't parse commits) | Conventional Commits required | Conventional Commits required |
 | Changelog | Optional, from commit messages | Plugin-based | Automatic |

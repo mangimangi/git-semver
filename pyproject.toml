@@ -1,7 +1,7 @@
 [project]
 name = "git-semver"
 description = "Config-driven semantic versioning for git repos"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 dynamic = ["version"]
 
