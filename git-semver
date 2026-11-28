@@ -987,6 +987,16 @@ def cmd_check_bump(args):
     return 1
 
 
+def push_tags(tags):
+    """Push each of `tags` to origin by name, never forced.
+
+    Not `git push --tags`: that would also push any other local tag, such
+    as a stale `latest`, and fail on "would clobber existing tag".
+    """
+    for tag in tags:
+        git("push", PUSH_REMOTE, tag, check=True)
+
+
 def cmd_bump(args):
     """Bump version, update files, commit, tag, push."""
     config = load_config(args.config)
@@ -1012,12 +1022,11 @@ def cmd_bump(args):
 
     # Tag
     git("tag", "-a", tag, "-m", tag)
-    git("tag", "-f", "latest")
-    print(f"Tagged: {tag} + latest")
+    print(f"Tagged: {tag}")
 
-    # Push
+    # Push the commit, then the new tag by name (never forced, never --tags)
     git("push", check=True)
-    git("push", "--tags", "--force", check=True)
+    push_tags([tag])
     print(f"\nVersion bumped to {new_version} and pushed")
 
 
@@ -1087,12 +1096,11 @@ def cmd_bump_all(args):
     # Create tags
     for _, _, _, tag in bumps:
         git("tag", "-a", tag, "-m", tag)
-    git("tag", "-f", "latest")
-    print(f"Tagged: {tags_str} + latest")
+    print(f"Tagged: {tags_str}")
 
-    # Push
+    # Push the commit, then the new tags by name (never forced, never --tags)
     git("push", check=True)
-    git("push", "--tags", "--force", check=True)
+    push_tags(tags)
     print(f"\nBumped {len(bumps)} component(s) and pushed")
 
 
@@ -1146,18 +1154,15 @@ def cmd_tag(args):
         print(f"Tagged {label}: {tag_name}")
         tags_created.append(tag_name)
 
-    # Always update latest tag
-    git("tag", "-f", "latest")
-
     if not tags_created:
         print("No tags created")
         return
 
     tags_str = ", ".join(tags_created)
-    print(f"Created tags: {tags_str} + latest")
+    print(f"Created tags: {tags_str}")
 
     if getattr(args, "push", False):
-        git("push", "--tags", "--force", check=True)
+        push_tags(tags_created)
         print("Tags pushed")
 
 

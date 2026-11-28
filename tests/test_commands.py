@@ -187,12 +187,16 @@ class TestCmdBump:
         git_semver.cmd_bump(make_args(config=path))
         out = capsys.readouterr().out
         assert "pushed" in out
-        assert "Tagged: v1.0.1 + latest" in out
+        assert "Tagged: v1.0.1\n" in out
+        assert "latest" not in out
         calls, _ = mock_git
         git_cmds = [c[0] for c in calls]
         assert ("push",) in git_cmds
         assert ("tag", "-a", "v1.0.1", "-m", "v1.0.1") in git_cmds
-        assert ("tag", "-f", "latest") in git_cmds
+        assert not any("latest" in c for c in git_cmds)
+        assert not any("--force" in c or "-f" in c or "--tags" in c for c in git_cmds)
+        assert ("push", "origin", "v1.0.1") in git_cmds
+        assert git_cmds.index(("push",)) < git_cmds.index(("push", "origin", "v1.0.1"))
 
     def test_bump_subdir(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
@@ -377,6 +381,12 @@ class TestCmdBumpAll:
         git_semver.cmd_bump_all(make_args(config=path, since="abc"))
         out = capsys.readouterr().out
         assert "pushed" in out
+        assert "Tagged: v1.0.1\n" in out
+        assert "latest" not in out
+        git_cmds = [c[0] for c in calls]
+        assert ("push", "origin", "v1.0.1") in git_cmds
+        assert not any("latest" in c for c in git_cmds)
+        assert not any("--force" in c or "-f" in c or "--tags" in c for c in git_cmds)
 
     def test_missing_since_raises(self, make_config):
         path = make_config({"files": ["*.py"], "updates": {}})
@@ -543,7 +553,8 @@ class TestCmdTag:
         calls, _ = mock_git
         git_cmds = [c[0] for c in calls]
         assert ("tag", "-a", "v1.2.3", "-m", "v1.2.3") in git_cmds
-        assert ("tag", "-f", "latest") in git_cmds
+        assert not any("latest" in c for c in git_cmds)
+        assert "Created tags: v1.2.3\n" in out
 
     def test_tags_subdir(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
@@ -597,7 +608,9 @@ class TestCmdTag:
         assert "Tags pushed" in out
         calls, _ = mock_git
         git_cmds = [c[0] for c in calls]
-        assert ("push", "--tags", "--force") in git_cmds
+        assert ("push", "origin", "v1.0.0") in git_cmds
+        assert not any("--force" in c or "--tags" in c for c in git_cmds)
+        assert not any("latest" in c for c in git_cmds)
 
     def test_tag_no_push_by_default(self, make_config, make_version_file, mock_git, capsys):
         path = make_config({
@@ -609,7 +622,7 @@ class TestCmdTag:
         git_semver.cmd_tag(make_args(config=path))
         calls, _ = mock_git
         git_cmds = [c[0] for c in calls]
-        assert ("push", "--tags", "--force") not in git_cmds
+        assert not any(c[0] == "push" for c in git_cmds)
 
     def test_tag_skipped_when_already_exists(self, make_config, make_version_file, mock_git, capsys):
         """Skip (don't error) when a tag for the current version already exists."""
