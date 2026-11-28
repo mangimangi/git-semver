@@ -14,7 +14,11 @@
 #
 # Behavior:
 #   - Always updates: git-semver (core script), release
-#   - First install only: workflow template to .github/workflows/ (version-bump; skipped if present)
+#   - First install only: workflow template to .github/workflows/ (version-bump).
+#     Never on an upgrade (an earlier install is recorded), never when the file
+#     is present, and never when the repository releases through git-cicd (its
+#     git-cicd config runs git-semver's `release`, or its git-semver config sets
+#     "bump_on": "pull_request").
 #   - Preserves .vendored/configs/git-semver.json (only creates if missing)
 #
 set -euo pipefail
@@ -41,6 +45,23 @@ fetch_file() {
 echo "Installing git-semver v$VERSION from $SEMVER_REPO"
 
 INSTALLED_FILES=()
+WORKFLOW=.github/workflows/version-bump.yml
+PREVIOUS_FILES=.vendored/manifests/git-semver.files
+
+# Recorded before anything is written: an earlier git-semver install leaves its
+# manifests or its scripts behind, so their absence means a first install.
+EARLIER_INSTALL=
+if [ -e .vendored/manifests/git-semver.version ] || [ -e "$PREVIOUS_FILES" ] \
+   || [ -e "$INSTALL_DIR/git-semver" ] || [ -e .semver/git-semver ]; then
+    EARLIER_INSTALL=1
+fi
+
+# The workflow was installed by an earlier git-semver install when that
+# install's manifest lists it.
+WORKFLOW_FROM_EARLIER=
+if [ -f "$PREVIOUS_FILES" ] && grep -qxF "$WORKFLOW" "$PREVIOUS_FILES"; then
+    WORKFLOW_FROM_EARLIER=1
+fi
 
 # Create directories
 mkdir -p "$INSTALL_DIR" .vendored/configs .github/workflows
@@ -71,14 +92,55 @@ mkdir -p .vendored/manifests
 fetch_file "templates/config.schema" ".vendored/manifests/git-semver.schema"
 INSTALLED_FILES+=(".vendored/manifests/git-semver.schema")
 
-# Helper to install a workflow file (first install only).
-# Substitutes __INSTALL_DIR__ with VENDOR_INSTALL_DIR so the workflow's `run:`
-# paths match where release scripts were actually installed.
+# Print why the repository releases through git-cicd, or nothing when it does
+# not: a git-cicd job step that is git-semver's `release` (`release`,
+# `./release`, `<install dir>/release`, `.semver/release` or a path ending in
+# `git-semver/release`, alone or as the command of an argument list), or
+# "bump_on": "pull_request" in the git-semver config. The JSON is flattened to
+# one line and only its "steps" arrays (one level of nesting) are searched.
+releases_through_git_cicd() {
+    local cicd=.vendored/configs/git-cicd.json semver=.vendored/configs/git-semver.json
+    local step
+    if [ -f "$cicd" ]; then
+        while IFS= read -r step; do
+            case "$step" in
+                release|./release|"$INSTALL_DIR/release"|.semver/release|*/git-semver/release)
+                    echo "$cicd has a job step that runs git-semver's release"
+                    return ;;
+            esac
+        done < <(tr -d '\n' < "$cicd" \
+            | grep -oE '"steps"[[:space:]]*:[[:space:]]*\[([^][]|\[[^][]*\])*\]' \
+            | sed -E 's/^"steps"[[:space:]]*:[[:space:]]*//; s/\[[[:space:]]*("[^"]*")[^][]*\]/\1/g' \
+            | grep -oE '"[^"]*"' | tr -d '"')
+    fi
+    if [ -f "$semver" ] && tr -d '\n' < "$semver" \
+        | grep -qE '"bump_on"[[:space:]]*:[[:space:]]*"pull_request"'; then
+        echo "$semver sets \"bump_on\": \"pull_request\""
+    fi
+}
+
+# Install the workflow on a first install only. Substitutes __INSTALL_DIR__
+# with VENDOR_INSTALL_DIR so the workflow's `run:` paths match where release
+# scripts were actually installed.
 install_workflow() {
     local workflow="$1"
     local dest=".github/workflows/$workflow"
+    local reason
     if [ -f "$dest" ]; then
         echo "Workflow $dest already exists, skipping"
+        # Still git-semver's when an earlier install wrote it.
+        if [ -n "$WORKFLOW_FROM_EARLIER" ]; then
+            INSTALLED_FILES+=("$dest")
+        fi
+        return
+    fi
+    if [ -n "$EARLIER_INSTALL" ]; then
+        echo "Not installing $dest: an upgrade never adds it (git-semver was installed here before)"
+        return
+    fi
+    reason="$(releases_through_git_cicd)"
+    if [ -n "$reason" ]; then
+        echo "Not installing $dest: the repository releases through git-cicd ($reason)"
         return
     fi
     if fetch_file "templates/github/workflows/$workflow" "$dest" 2>/dev/null; then
@@ -88,15 +150,23 @@ install_workflow() {
         mv "$tmp" "$dest"
         INSTALLED_FILES+=("$dest")
         echo "Installed $dest"
+    else
+        rm -f "$dest"
     fi
 }
 
-# Install workflow template (skipped if already present)
 install_workflow "version-bump.yml"
 
 # Write manifest when requested by the framework
+# (only files that are on disk: the manifest never lists an absent file).
 if [ -n "${VENDOR_MANIFEST:-}" ]; then
-    printf '%s\n' "${INSTALLED_FILES[@]}" > "$VENDOR_MANIFEST"
+    : > "$VENDOR_MANIFEST.tmp"
+    for f in "${INSTALLED_FILES[@]}"; do
+        if [ -e "$f" ]; then
+            printf '%s\n' "$f" >> "$VENDOR_MANIFEST.tmp"
+        fi
+    done
+    mv "$VENDOR_MANIFEST.tmp" "$VENDOR_MANIFEST"
 fi
 
 echo ""

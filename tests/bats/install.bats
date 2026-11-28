@@ -135,9 +135,137 @@ RAW=https://raw.githubusercontent.com/mangimangi/git-semver
 
 @test "a workflow template that cannot be downloaded is skipped, not fatal" {
     export CURL_FAIL=templates/github/workflows
+    export VENDOR_MANIFEST="$BATS_TEST_TMPDIR/manifest"
     run bash "$ROOT/install.sh" 1.2.3
     [ "$status" -eq 0 ]
     [[ "$output" != *"Installed .github/workflows"* ]]
+    [ ! -e .github/workflows/version-bump.yml ]
+    ! grep -q version-bump "$VENDOR_MANIFEST"
+}
+
+@test "a gh download of a missing template leaves no empty workflow behind" {
+    stub gh '
+case "$2" in */templates/github/workflows/*) exit 1 ;; esac
+printf "gh:%s\n" "${2#repos/*/contents/}" | base64'
+    export GH_TOKEN=t
+    run bash "$ROOT/install.sh" 1.2.3
+    [ "$status" -eq 0 ]
+    [ ! -e .github/workflows/version-bump.yml ]
+}
+
+# An upgrade: an earlier git-semver install is recorded in the repository.
+@test "an upgrade recorded by the version manifest does not add version-bump.yml" {
+    mkdir -p .vendored/manifests
+    echo 0.0.15 > .vendored/manifests/git-semver.version
+    run bash "$ROOT/install.sh" 1.2.3
+    [ "$status" -eq 0 ]
+    [ ! -e .github/workflows/version-bump.yml ]
+    [[ "$output" == *"Not installing .github/workflows/version-bump.yml: an upgrade never adds it"* ]]
+    not_logged "curl -fsSL $RAW/v1.2.3/templates/github/workflows"
+}
+
+@test "an upgrade recorded by the files manifest does not add version-bump.yml" {
+    mkdir -p .vendored/manifests
+    printf '.vendored/pkg/git-semver/git-semver\n' > .vendored/manifests/git-semver.files
+    run bash "$ROOT/install.sh" 1.2.3
+    [ ! -e .github/workflows/version-bump.yml ]
+}
+
+@test "an upgrade over installed scripts does not add version-bump.yml" {
+    mkdir -p .vendored/pkg/git-semver
+    touch .vendored/pkg/git-semver/git-semver
+    run bash "$ROOT/install.sh" 1.2.3
+    [ ! -e .github/workflows/version-bump.yml ]
+}
+
+@test "an upgrade from the legacy .semver layout does not add version-bump.yml" {
+    mkdir -p .semver
+    touch .semver/git-semver
+    run bash "$ROOT/install.sh" 1.2.3
+    [ ! -e .github/workflows/version-bump.yml ]
+}
+
+@test "the manifest of an upgrade lists no workflow that is not there" {
+    mkdir -p .vendored/manifests
+    printf '.vendored/pkg/git-semver/git-semver\n.github/workflows/version-bump.yml\n' \
+        > .vendored/manifests/git-semver.files
+    export VENDOR_MANIFEST=.vendored/manifests/git-semver.files
+    run bash "$ROOT/install.sh" 1.2.3
+    [ "$status" -eq 0 ]
+    [ "$(cat "$VENDOR_MANIFEST")" = ".vendored/pkg/git-semver/git-semver
+.vendored/pkg/git-semver/release
+.vendored/manifests/git-semver.schema" ]
+}
+
+@test "the manifest keeps a workflow an earlier install wrote and left in place" {
+    mkdir -p .vendored/manifests .github/workflows
+    echo mine > .github/workflows/version-bump.yml
+    printf '.vendored/pkg/git-semver/git-semver\n.github/workflows/version-bump.yml\n' \
+        > .vendored/manifests/git-semver.files
+    export VENDOR_MANIFEST=.vendored/manifests/git-semver.files
+    run bash "$ROOT/install.sh" 1.2.3
+    [ "$(cat .github/workflows/version-bump.yml)" = mine ]
+    [ "$(cat "$VENDOR_MANIFEST")" = ".vendored/pkg/git-semver/git-semver
+.vendored/pkg/git-semver/release
+.vendored/manifests/git-semver.schema
+.github/workflows/version-bump.yml" ]
+}
+
+# A first install into a repository that releases through git-cicd.
+write_cicd() {
+    mkdir -p .vendored/configs
+    printf '%s\n' "$1" > .vendored/configs/git-cicd.json
+}
+
+@test "a first install whose git-cicd config runs release does not add the workflow and says why" {
+    write_cicd '{
+  "jobs": {
+    "test": {"on": ["open"], "paths": ["release"], "steps": [["git-semver", "check-bump"]]},
+    "release": {
+      "on": ["merge"],
+      "steps": [
+        "release"
+      ]
+    }
+  }
+}'
+    export VENDOR_MANIFEST="$BATS_TEST_TMPDIR/manifest"
+    run bash "$ROOT/install.sh" 1.2.3
+    [ "$status" -eq 0 ]
+    [ ! -e .github/workflows/version-bump.yml ]
+    [ "$(grep -c "Not installing" <<<"$output")" -eq 1 ]
+    [[ "$output" == *"Not installing .github/workflows/version-bump.yml: the repository releases through git-cicd (.vendored/configs/git-cicd.json has a job step that runs git-semver's release)"* ]]
+    ! grep -q version-bump "$VENDOR_MANIFEST"
+}
+
+@test "a git-cicd step running the installed release, as a command with arguments, counts" {
+    write_cicd '{"jobs": {"r": {"steps": ["ci/test.sh", [".vendored/pkg/git-semver/release", "--dry"]]}}}'
+    run bash "$ROOT/install.sh" 1.2.3
+    [ ! -e .github/workflows/version-bump.yml ]
+    [[ "$output" == *"releases through git-cicd"* ]]
+}
+
+@test "a git-cicd config that does not run release still gets the workflow" {
+    write_cicd '{"jobs": {"release": {"paths": ["release"], "steps": [["sh", "release"], "ci/release.sh"]}}}'
+    run bash "$ROOT/install.sh" 1.2.3
+    [ -e .github/workflows/version-bump.yml ]
+    [[ "$output" == *"Installed .github/workflows/version-bump.yml"* ]]
+}
+
+@test "a first install whose git-semver config bumps in the pull request does not add the workflow" {
+    mkdir -p .vendored/configs
+    printf '{\n  "bump_on": "pull_request"\n}\n' > .vendored/configs/git-semver.json
+    run bash "$ROOT/install.sh" 1.2.3
+    [ "$status" -eq 0 ]
+    [ ! -e .github/workflows/version-bump.yml ]
+    [[ "$output" == *'releases through git-cicd (.vendored/configs/git-semver.json sets "bump_on": "pull_request")'* ]]
+}
+
+@test "bump_on merge in the git-semver config still gets the workflow" {
+    mkdir -p .vendored/configs
+    echo '{"bump_on": "merge"}' > .vendored/configs/git-semver.json
+    run bash "$ROOT/install.sh" 1.2.3
+    [ -e .github/workflows/version-bump.yml ]
 }
 
 @test "a core script that cannot be downloaded fails the install" {

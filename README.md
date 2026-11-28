@@ -25,6 +25,8 @@ curl -fsSL https://raw.githubusercontent.com/mangimangi/git-semver/main/install.
 
 `<version>` is a release such as `0.1.0` (see the repository's tags); the installer fetches that version's files from its tag. The script is read from `main`, not from a `latest` tag, which the bump-in-the-pull-request path no longer moves.
 
+`version-bump.yml` is installed only on a first install: when no earlier git-semver install is recorded in the repository (no `.vendored/manifests/git-semver.version` or `git-semver.files`, and no installed `git-semver` script) and the file is absent. An upgrade never adds it, so a repository that removed it keeps it removed, and an existing `version-bump.yml` is left as it is. A repository that releases through git-cicd does not get it even on a first install: when `.vendored/configs/git-cicd.json` has a job step that runs git-semver's `release`, or `.vendored/configs/git-semver.json` sets `"bump_on": "pull_request"`, the installer skips the workflow and says why in one line. The installed-file manifest lists the workflow only when that install wrote it or an earlier install did and it is still there; it never lists a file that is not on disk.
+
 ### Via GitHub Actions (ongoing updates)
 
 The `install-vendored.yml` workflow handles updates for all vendored tools (including git-semver):
@@ -42,8 +44,10 @@ your-project/
 │   └── config.json        # Your config (edit this!)
 └── .github/
     └── workflows/
-        └── version-bump.yml          # Auto-bump + release on merge
+        └── version-bump.yml          # Auto-bump + release on merge (first install only; not with git-cicd)
 ```
+
+`version-bump.yml` is written by a first install only, never by an upgrade, and not into a repository that releases through git-cicd (see [Installation](#installation)).
 
 When installed via the git-vendored v2 framework, code files (`git-semver`, `release`) may live in `.vendored/pkg/git-semver/` instead of `.semver/`. Config lives at `.vendored/configs/git-semver.json`.
 
