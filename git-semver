@@ -11,12 +11,14 @@ Subcommands:
     check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]
                                      Fail when a change touches configured files
                                      without raising the version; in fixing mode
-                                     also commit the missing patch bump
+                                     also commit the missing patch bump and
+                                     push it with CICD_WRITE_TOKEN
 
 Config: .vendored/configs/git-semver.json (see README for schema)
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -237,14 +239,18 @@ def check_files_changed(changed_files, patterns):
 
 # ── Git helpers ─────────────────────────────────────────────────────────────
 
-def git(*args, check=True, capture=True):
-    """Run a git command and return stdout."""
+def git(*args, check=True, capture=True, env=None):
+    """Run a git command and return stdout.
+
+    `env`, when given, is the whole environment of the command.
+    """
     cmd = ["git"] + list(args)
     result = subprocess.run(
         cmd,
         capture_output=capture,
         text=True,
         check=False,
+        env=env,
     )
     if check and result.returncode != 0:
         stderr = result.stderr.strip() if capture else ""
@@ -656,6 +662,108 @@ def fix_missing_bumps(config, base, head, fixable):
     return raised, sha
 
 
+# ── Pushing the fix ─────────────────────────────────────────────────────────
+
+PUSH_REMOTE = "origin"
+TOKEN_HEADER_KEY = "http.https://github.com/.extraheader"
+
+
+def token_header(token):
+    """The extraheader value actions/checkout writes for a token."""
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return f"AUTHORIZATION: basic {basic}"
+
+
+def token_git_env(token):
+    """An environment that gives git `token` for github.com and nothing else.
+
+    The token travels as config in GIT_CONFIG_* variables, never on the
+    command line or in .git/config. The first, empty entry resets the
+    extraheader actions/checkout persisted (with GITHUB_TOKEN, whose pushes
+    start no workflow), the second adds the token's.
+    """
+    env = dict(os.environ)
+    env.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": TOKEN_HEADER_KEY,
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": TOKEN_HEADER_KEY,
+        "GIT_CONFIG_VALUE_1": token_header(token),
+    })
+    return env
+
+
+def redact(text, token):
+    """`text` with the token, its basic-auth form and its header removed."""
+    basic = token_header(token).split(" ", 2)[2]
+    for secret in (basic, token):
+        text = text.replace(secret, "***")
+    return text
+
+
+def is_release_branch(branch, target):
+    """The branches that are released from: the target, main and master."""
+    return branch in {target, "main", "master"}
+
+
+def push_refusal(token, source, target, head_sha, env):
+    """Why the fix commit may not be pushed to `source`, or None."""
+    if not token:
+        return "no CICD_WRITE_TOKEN: declare it on the version check job"
+    if not source:
+        return ("source branch unknown: pass --source-branch or set "
+                "CICD_SOURCE_BRANCH")
+    if source == target:
+        return f"source branch {source} is the target branch"
+    if is_release_branch(source, target):
+        return f"source branch {source} is a release branch"
+    result = git("ls-remote", "--heads", PUSH_REMOTE, f"refs/heads/{source}",
+                 check=False, env=env)
+    if result.returncode != 0:
+        return (f"cannot read {PUSH_REMOTE}: "
+                f"{redact(result.stderr.strip(), token)}")
+    remote_sha = result.stdout.split("\t", 1)[0].strip()
+    if not remote_sha:
+        return (f"branch {source} is not on {PUSH_REMOTE} (a fork's branch "
+                "is not pushed to)")
+    if remote_sha != head_sha:
+        return f"branch {source} moved on from {head_sha} (now {remote_sha})"
+    return None
+
+
+def push_fix(raised, sha, head_sha, args):
+    """Push the fix commit to the pull request's source branch, if allowed.
+
+    Prints what happened; the token never appears in the output. Returns
+    True when pushed.
+    """
+    token = os.environ.get("CICD_WRITE_TOKEN", "")
+    source = (getattr(args, "source_branch", None)
+              or os.environ.get("CICD_SOURCE_BRANCH", ""))
+    target = (getattr(args, "target_branch", None)
+              or os.environ.get("CICD_TARGET_BRANCH", ""))
+    env = token_git_env(token) if token else None
+
+    reason = push_refusal(token, source, target, head_sha, env)
+    if reason is None:
+        result = git("push", PUSH_REMOTE, f"HEAD:refs/heads/{source}",
+                     check=False, env=env)
+        if result.returncode == 0:
+            print(f"Pushed {sha} to {source}")
+            print(f"The pushed commit {sha} starts its own run; wait for "
+                  "that one")
+            return True
+        output = (result.stderr.strip() or result.stdout.strip())
+        reason = f"git push failed: {redact(output, token)}"
+
+    print(f"Not pushing the bump: {reason}")
+    for label, _, _ in raised:
+        command = bump_fix_command(None if label == "root" else label)
+        print(f"  fix: run `{command}` on the branch and push the commit")
+    return False
+
+
 def cmd_check_bump(args):
     """Fail when the change under test touches configured files without
     raising the version; in fixing mode, also make the missing bump.
@@ -672,8 +780,16 @@ def cmd_check_bump(args):
     that went down, is malformed or is missing is an error and no commit is
     made at all.
 
+    The fix commit is then pushed to the pull request's source branch
+    (--source-branch/--target-branch, else CICD_SOURCE_BRANCH/
+    CICD_TARGET_BRANCH) with CICD_WRITE_TOKEN, never forced. It is not
+    pushed, with a reason and the command to run, when there is no token,
+    no source branch, or the source branch is the target or a release
+    branch, is not on origin (a fork) or moved on from the head.
+
     Returns 0 when every component passes, 1 otherwise (including when a
-    fix commit was made: the commit under test still lacked the bump).
+    fix commit was made or pushed: the commit under test still lacked the
+    bump, and the pushed commit's own run is the one that can pass).
     """
     config = load_config(args.config)
     base = getattr(args, "base", None) or os.environ.get("CICD_BASE", "")
@@ -708,11 +824,13 @@ def cmd_check_bump(args):
               "or is missing; fix it by hand")
         return 1
 
+    head_sha = git("rev-parse", f"{head}^{{commit}}").stdout.strip()
     raised, sha = fix_missing_bumps(config, base, head, fixable)
     for label, old, new in raised:
         print(f"Raised {label}: {old} -> {new}")
     print(f"Made commit {sha} with the missing bump; the commit under test "
           "still lacked it")
+    push_fix(raised, sha, head_sha, args)
     return 1
 
 
@@ -999,6 +1117,15 @@ def build_parser():
     fix_group.add_argument(
         "--no-fix", dest="fix", action="store_false",
         help="Check only: never commit a bump",
+    )
+    check_bump_parser.add_argument(
+        "--source-branch", default=None,
+        help="Pull request branch the fix is pushed to "
+             "(default: $CICD_SOURCE_BRANCH)",
+    )
+    check_bump_parser.add_argument(
+        "--target-branch", default=None,
+        help="Branch the pull request goes into (default: $CICD_TARGET_BRANCH)",
     )
 
     return parser

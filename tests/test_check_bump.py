@@ -46,7 +46,8 @@ def args(**kwargs):
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A repo on `main` with root files ["src/**"] at 1.2.3, and a branch `pr`."""
-    for key in ("CICD_BASE", "CICD_HEAD"):
+    for key in ("CICD_BASE", "CICD_HEAD", "CICD_SOURCE_BRANCH",
+                "CICD_TARGET_BRANCH", "CICD_WRITE_TOKEN"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
     g(tmp_path, "init", "-q", "-b", "main")
@@ -490,6 +491,204 @@ class TestCheckBumpFix:
             "git-semver@users.noreply.github.com"
 
 
+FAKE_TOKEN = "ghp_FAKEfake0123456789abcdefABCDEF012345"
+FAKE_BASIC = git_semver.token_header(FAKE_TOKEN).split(" ", 2)[2]
+
+
+@pytest.fixture
+def origin_pr(pr_repo, tmp_path_factory, monkeypatch):
+    """pr_repo with an unbumped change on `pr`, pushed to a bare `origin`."""
+    bare = tmp_path_factory.mktemp("origin") / "origin.git"
+    g(pr_repo, "init", "-q", "--bare", str(bare))
+    g(pr_repo, "remote", "add", "origin", str(bare))
+    write(pr_repo, "src/app.py", "b\n")
+    commit(pr_repo, "feat: change app")
+    g(pr_repo, "push", "-q", "origin", "main", "pr")
+    monkeypatch.setenv("CICD_WRITE_TOKEN", FAKE_TOKEN)
+    monkeypatch.setenv("CICD_SOURCE_BRANCH", "pr")
+    monkeypatch.setenv("CICD_TARGET_BRANCH", "main")
+    return pr_repo
+
+
+@pytest.fixture
+def push_boundary(monkeypatch):
+    """Run git for real except `git push`, which is recorded with its env."""
+    calls = []
+    real_git = git_semver.git
+    response = {"rc": 0, "stderr": "", "stdout": ""}
+
+    def _git(*a, check=True, capture=True, env=None):
+        if a[:1] == ("push",):
+            calls.append((a, env))
+            return subprocess.CompletedProcess(
+                ["git", *a], response["rc"], response["stdout"],
+                response["stderr"])
+        return real_git(*a, check=check, capture=capture, env=env)
+
+    monkeypatch.setattr(git_semver, "git", _git)
+    return calls, response
+
+
+def remote_sha(repo, branch):
+    bare = g(repo, "remote", "get-url", "origin")
+    return g(repo, "--git-dir", bare, "rev-parse", branch)
+
+
+class TestCheckBumpPush:
+    def test_pushes_to_source_branch(self, origin_pr, push_boundary, capsys):
+        calls, _ = push_boundary
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        sha = g(origin_pr, "rev-parse", "HEAD")
+        assert sha != remote_sha(origin_pr, "pr")
+        assert len(calls) == 1
+        argv, env = calls[0]
+        assert argv == ("push", "origin", "HEAD:refs/heads/pr")
+        assert FAKE_TOKEN not in " ".join(argv)
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_KEY_1"] == "http.https://github.com/.extraheader"
+        assert env["GIT_CONFIG_VALUE_1"] == f"AUTHORIZATION: basic {FAKE_BASIC}"
+        assert f"Pushed {sha} to pr" in out
+        assert f"The pushed commit {sha} starts its own run; wait for that one" in out
+
+    def test_bump_already_made_no_commit_no_push(self, origin_pr, push_boundary,
+                                                 capsys):
+        calls, _ = push_boundary
+        write(origin_pr, "VERSION", "1.3.0\n")
+        commit(origin_pr)
+        assert run_check(capsys, base="main")[0] == 0
+        assert calls == []
+
+    def _refused(self, capsys, push_boundary, reason, pushes=0, **kwargs):
+        calls, _ = push_boundary
+        rc, out = run_check(capsys, base="main", **kwargs)
+        assert rc == 1
+        assert len(calls) == pushes
+        assert f"Not pushing the bump: {reason}" in out
+        assert "  fix: run `git-semver bump patch --no-push` on the branch" in out
+        return out
+
+    def test_no_token(self, origin_pr, push_boundary, capsys, monkeypatch):
+        monkeypatch.delenv("CICD_WRITE_TOKEN")
+        self._refused(capsys, push_boundary,
+                      "no CICD_WRITE_TOKEN: declare it on the version check job")
+
+    def test_empty_token(self, origin_pr, push_boundary, capsys, monkeypatch):
+        monkeypatch.setenv("CICD_WRITE_TOKEN", "")
+        self._refused(capsys, push_boundary, "no CICD_WRITE_TOKEN")
+
+    def test_no_source_branch(self, origin_pr, push_boundary, capsys,
+                              monkeypatch):
+        monkeypatch.delenv("CICD_SOURCE_BRANCH")
+        self._refused(capsys, push_boundary, "source branch unknown")
+
+    def test_source_is_target(self, origin_pr, push_boundary, capsys,
+                              monkeypatch):
+        monkeypatch.setenv("CICD_TARGET_BRANCH", "pr")
+        self._refused(capsys, push_boundary,
+                      "source branch pr is the target branch")
+
+    @pytest.mark.parametrize("branch", ["main", "master"])
+    def test_source_is_release_branch(self, origin_pr, push_boundary, capsys,
+                                      monkeypatch, branch):
+        monkeypatch.setenv("CICD_SOURCE_BRANCH", branch)
+        monkeypatch.setenv("CICD_TARGET_BRANCH", "plan/x")
+        self._refused(capsys, push_boundary,
+                      f"source branch {branch} is a release branch")
+
+    def test_branch_not_on_origin(self, origin_pr, push_boundary, capsys,
+                                  monkeypatch):
+        monkeypatch.setenv("CICD_SOURCE_BRANCH", "from-a-fork")
+        self._refused(capsys, push_boundary,
+                      "branch from-a-fork is not on origin")
+
+    def test_branch_moved_on(self, origin_pr, push_boundary, capsys):
+        head = g(origin_pr, "rev-parse", "HEAD")
+        g(origin_pr, "checkout", "-q", "-b", "later")
+        write(origin_pr, "README.md", "later\n")
+        later = commit(origin_pr)
+        g(origin_pr, "push", "-q", "origin", "later:pr")
+        g(origin_pr, "checkout", "-q", "pr")
+        self._refused(capsys, push_boundary,
+                      f"branch pr moved on from {head} (now {later})")
+
+    def test_origin_unreadable(self, origin_pr, push_boundary, capsys):
+        g(origin_pr, "remote", "remove", "origin")
+        self._refused(capsys, push_boundary, "cannot read origin: ")
+
+    def test_push_fails_redacted(self, origin_pr, push_boundary, capsys):
+        _, response = push_boundary
+        response["rc"] = 1
+        response["stderr"] = (f"remote: denied for {FAKE_TOKEN}\n"
+                              f"header basic {FAKE_BASIC}\n")
+        out = self._refused(capsys, push_boundary,
+                            "git push failed: remote: denied for ***",
+                            pushes=1)
+        assert FAKE_TOKEN not in out and FAKE_BASIC not in out
+        assert "header basic ***" in out
+
+    def test_push_fails_stdout_only(self, origin_pr, push_boundary, capsys):
+        _, response = push_boundary
+        response["rc"] = 1
+        response["stdout"] = "rejected"
+        self._refused(capsys, push_boundary, "git push failed: rejected",
+                      pushes=1)
+
+    def test_subdir_fix_line(self, origin_pr, push_boundary, capsys,
+                             monkeypatch):
+        set_config(origin_pr, bump_on="pull_request",
+                   backend={"version_file": "backend/VERSION",
+                            "files": ["backend/**"]})
+        write(origin_pr, "VERSION", "1.3.0\n")
+        write(origin_pr, "backend/VERSION", "0.1.0\n")
+        g(origin_pr, "checkout", "-q", "main")
+        commit(origin_pr, "backend")
+        g(origin_pr, "checkout", "-q", "pr")
+        g(origin_pr, "reset", "-q", "--hard", "main")
+        write(origin_pr, "backend/x.py", "b\n")
+        commit(origin_pr)
+        monkeypatch.delenv("CICD_WRITE_TOKEN")
+        rc, out = run_check(capsys, base="main")
+        assert rc == 1
+        assert "  fix: run `git-semver bump patch --no-push --subdir backend`" \
+            " on the branch and push the commit" in out
+
+    def test_args_override_env(self, origin_pr, push_boundary, capsys,
+                               monkeypatch):
+        calls, _ = push_boundary
+        monkeypatch.setenv("CICD_SOURCE_BRANCH", "main")
+        monkeypatch.setenv("CICD_TARGET_BRANCH", "pr")
+        rc, out = run_check(capsys, base="main", source_branch="pr",
+                            target_branch="main")
+        assert rc == 1
+        assert [c[0] for c in calls] == [("push", "origin", "HEAD:refs/heads/pr")]
+
+    def test_no_fix_pushes_nothing(self, origin_pr, push_boundary, capsys):
+        calls, _ = push_boundary
+        before = count(origin_pr)
+        rc, out = run_check(capsys, base="main", fix=False)
+        assert rc == 1
+        assert calls == [] and count(origin_pr) == before
+        assert "git-semver bump patch --no-push" in out
+
+    def test_real_push_leaks_no_token(self, origin_pr, capsys):
+        rc = git_semver.cmd_check_bump(args(base="main"))
+        captured = capsys.readouterr()
+        assert rc == 1
+        sha = g(origin_pr, "rev-parse", "HEAD")
+        assert remote_sha(origin_pr, "pr") == sha
+        assert f"Pushed {sha} to pr" in captured.out
+        text = captured.out + captured.err
+        text += g(origin_pr, "log", "-1", "--format=%B")
+        text += g(origin_pr, "config", "--list", "--show-origin")
+        text += (origin_pr / ".git" / "config").read_text()
+        for secret in (FAKE_TOKEN, FAKE_BASIC):
+            assert secret not in text
+        assert "extraheader" not in text
+
+
 class TestCheckBumpProcess:
     """Run as CI does, through the script's entry point."""
 
@@ -524,6 +723,16 @@ class TestCheckBumpProcess:
         assert "Raised root: 1.2.3 -> 1.2.4" in result.stdout
         assert g(pr_repo, "log", "-1", "--format=%s") == \
             "chore: bump version (root 1.2.3 -> 1.2.4)"
+
+    def test_fixing_mode_pushes(self, origin_pr):
+        result = self._run(origin_pr, "--base", "main", "--source-branch", "pr",
+                           "--target-branch", "main",
+                           env_extra={"CICD_WRITE_TOKEN": FAKE_TOKEN})
+        assert result.returncode == 1, result.stderr
+        sha = g(origin_pr, "rev-parse", "HEAD")
+        assert remote_sha(origin_pr, "pr") == sha
+        assert "starts its own run; wait for that one" in result.stdout
+        assert FAKE_TOKEN not in result.stdout + result.stderr
 
     def test_fix_and_no_fix_exclusive(self, repo):
         result = self._run(repo, "--base", "main", "--fix", "--no-fix")
