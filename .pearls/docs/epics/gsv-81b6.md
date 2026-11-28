@@ -28,21 +28,21 @@ What `release` does today, to keep (read from `release` on `main`, 2026-11-28):
 
 ## What ships
 
-- `release` decides for itself: one entry point for a merge and a manual run
+- `release` decides for itself: one entry point for a merge and a manual run — **gsv-81b6.1**
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
   - affected surface: `release` (`main`, `cmd_bump`, `cmd_publish`, `handle_push_bump`, `handle_dispatch_bump`), `tests/`, `README.md`, `docs/`
   - shape: A single way to call `release` (no `bump`/`publish` argument needed) works out which case it is in and does it. On a change that landed on a branch: the landed commit is a bump commit (message starts with `chore: bump version`): tag and create the releases, as `publish` does; the landed commit is an install commit (`chore: install`): nothing, exit 0; anything else: bump as `handle_push_bump` does, including `on_merge`, `automerge`, the protected-branch fallback and tagging in the same run when the direct push worked. On a manual run: bump as `handle_dispatch_bump` does. It reads which case it is in from git-cicd's variables when they are set (`CICD_TRIGGER` `merge` or `manual`, `CICD_BASE` as the commit before the push, `CICD_HEAD`) and from the GitHub Actions variables it reads today otherwise, so the same script serves a git-cicd job and `version-bump.yml`. Bump type, subdirectory and changelog text come from the declared inputs of a manual run (`CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY`, `CICD_INPUT_CHANGELOG_DESCRIPTION`) when set, else from `INPUT_*` as today. `release bump` and `release publish` behave exactly as before. Any other trigger (`open`, `cron`) is refused with a reason and a non-zero exit. Tests cover each case without the network.
 
-- A later step can ask what was released at this commit
+- A later step can ask what was released at this commit — **gsv-81b6.2** (blocked by gsv-81b6.1)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
   - affected surface: `git-semver` (a new read-only subcommand) or `release`, `tests/`, `README.md`
   - shape: A documented, read-only command prints the version or versions released at the current commit (the version tags pointing at it, never `latest`), one per line, and prints nothing and exits 0 when none was. It needs only the local repository, no token and no network, so a repository's own later step in the same job can use it to decide whether to publish (`ci/publish-image.sh`). The README shows that pattern with a job whose steps are git-semver's release and then the repository's own script, and says that with a protected branch the publish step sees a version on the run for the merged bump commit, not on the run that opened the bump pull request.
 
-- git-semver's own release is a git-cicd job
+- git-semver's own release is a git-cicd job — **gsv-81b6.3** (blocked by gsv-81b6.1)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
@@ -66,3 +66,26 @@ What `release` does today, to keep (read from `release` on `main`, 2026-11-28):
 - Removing the `latest` tag; marking a release as defective; anything else about how versions move.
 - Replacing `gh pr create` and `gh release create` with a platform adapter.
 - Any change in git-cicd or git-vendored.
+
+## Issues
+
+| Issue | Scope |
+|-------|-------|
+| gsv-81b6.1 | `release` with no subcommand: trigger from `CICD_TRIGGER`/`GITHUB_EVENT_NAME`, bump-commit publishes, install-commit no-op, otherwise `handle_push_bump`; manual via `handle_dispatch_bump` with `CICD_INPUT_*`/`INPUT_*`; `open`/`cron` refused; tests in `tests/test_bump_and_release.py`; README + module docstring |
+| gsv-81b6.2 | `git-semver released [<ref>]`: prints version tags at the commit (never `latest`), nothing + exit 0 when none; tests in `tests/test_commands.py`; README command entry + later-step publish pattern with protected-branch note |
+| gsv-81b6.3 | `release` job in `.vendored/configs/git-cicd.json` (merge on `main`, manual with `bump_type`/`subdirectory`/`changelog_description`) running the root `release`; generated Merge/Manual workflows; README + AGENTS.md |
+
+## Refinement decisions
+
+- **gsv-81b6.1** — `CICD_*` variables take precedence over GitHub ones (`CICD_TRIGGER` > `GITHUB_EVENT_NAME`, `CICD_BASE` > `GITHUB_EVENT_BEFORE`, `CICD_HEAD` > `GITHUB_SHA`, `CICD_INPUT_*` > `INPUT_*`): inside a git-cicd job on Actions both sets exist and git-cicd's describe the job.
+- **gsv-81b6.1** — `sync_branch()` uses `CICD_TARGET_BRANCH` when set, else `GITHUB_REF`: git-cicd names the target branch itself; unchanged when unset.
+- **gsv-81b6.1** — commit rule is a prefix match on the landed commit's subject, equivalent to the workflow's `startsWith(head_commit.message, ...)`.
+- **gsv-81b6.1** — no auth change: git-cicd's merge/manual templates pass `GITHUB_TOKEN` (not `GH_TOKEN`), which `gh` accepts; documented in the docstring.
+- **gsv-81b6.1** — `TestMain.test_no_subcommand_exits` is replaced by "no subcommand and no trigger variables exits non-zero with a reason", explained in the PR, because no-subcommand is now a valid entry point (the acceptance criteria allow explained changes).
+- **gsv-81b6.2** — the query is a new `git-semver released [<ref>]` subcommand, not part of `release`: read-only, no CI env, callable as `.vendored/pkg/git-semver/git-semver released` from a consumer step.
+- **gsv-81b6.2** — prints full tag names (`v1.2.3`, `backend/v2.3.0`), not bare versions, so monorepo components stay unambiguous.
+- **gsv-81b6.2** — optional `<ref>` (default HEAD) so a step can ask about `$CICD_HEAD` explicitly.
+- **gsv-81b6.2 / gsv-81b6.3** — both blocked by gsv-81b6.1: the README pattern and the job both call `release` with no subcommand.
+- **gsv-81b6.3** — no `ci/` wrapper and `.vendored/configs/git-semver.json` `files` unchanged: `release` reads `CICD_*` itself and no new file ships to consumers.
+- **gsv-81b6.3** — release job `paths: ["**"]`: every merge must reach `release`; whether to bump is `bump-all`'s decision. Implementer verifies a bump commit is not classified by `needs_nothing`.
+- **gsv-81b6.3** — the old `version-bump.yml` and the new job coexisting on the integration branch is accepted per the plan; neither `version-bump.yml` nor `dogfood.yml` is touched.
