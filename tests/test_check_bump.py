@@ -47,7 +47,7 @@ def args(**kwargs):
 def repo(tmp_path, monkeypatch):
     """A repo on `main` with root files ["src/**"] at 1.2.3, and a branch `pr`."""
     for key in ("CICD_BASE", "CICD_HEAD", "CICD_SOURCE_BRANCH",
-                "CICD_TARGET_BRANCH", "CICD_WRITE_TOKEN"):
+                "CICD_TARGET_BRANCH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
     g(tmp_path, "init", "-q", "-b", "main")

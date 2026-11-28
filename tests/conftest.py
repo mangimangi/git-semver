@@ -30,6 +30,21 @@ _import_extensionless("git_semver", "git-semver")
 _import_extensionless("semver_script", "release")
 
 
+# ── Token guard ─────────────────────────────────────────────────────────────
+
+# Tokens no test may read from the runner. A test that needs one sets a fake
+# value with monkeypatch; test_token_guard.py fails without this fixture.
+TOKENS = ("CICD_WRITE_TOKEN", "CICD_READ_TOKEN", "VENDOR_PAT", "GH_TOKEN",
+          "GITHUB_TOKEN")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_tokens(monkeypatch):
+    """Remove every token from the environment before each test."""
+    for name in TOKENS:
+        monkeypatch.delenv(name, raising=False)
+
+
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 @pytest.fixture
