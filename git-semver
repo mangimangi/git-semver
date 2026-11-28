@@ -30,7 +30,7 @@ DEFAULT_VERSION_FILE = "VERSION"
 
 # Keys reserved for root-level config (not subdirectory names)
 RESERVED_KEYS = frozenset({
-    "version_file", "files", "updates", "changelog", "install",
+    "version_file", "files", "updates", "changelog", "install", "bump_on",
 })
 
 

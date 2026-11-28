@@ -257,6 +257,10 @@ Pattern matching for updates:
 - Pattern containing `=`: matches `pattern + quoted_version`, replaces with `pattern + "new_version"` (preserves quote style)
 - Pattern without `=`: matches `pattern + version`, replaces with `pattern + new_version`
 
+**`bump_on`** (default: `"merge"`)
+
+When the version is bumped. `"merge"` (also when the key is absent) is the bump-on-merge path: `release` bumps after a change lands. `"pull_request"` moves the bump into the pull request: `git-semver check-bump` fails a pull request that changes configured files without raising the version, and `release` with no subcommand only tags the landed commit and publishes it (see [Bumping in the pull request](#bumping-in-the-pull-request-bump_on-pull_request)). Any other value is an error naming the allowed values.
+
 **`changelog`** (default: enabled)
 
 Object with optional keys:
@@ -379,6 +383,26 @@ It reads the run from git-cicd's variables when they are set and from the GitHub
 | `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY`, `CICD_INPUT_CHANGELOG_DESCRIPTION` | `INPUT_BUMP_TYPE`, `INPUT_SUBDIRECTORY`, `INPUT_CHANGELOG_DESCRIPTION` | Manual-run inputs |
 
 `gh` reads its token from `GH_TOKEN` or `GITHUB_TOKEN` (git-cicd's merge and manual workflows pass `GITHUB_TOKEN`). `release bump` and `release publish` are unchanged; `version-bump.yml` keeps calling them.
+
+### Bumping in the pull request (`bump_on: pull_request`)
+
+With `"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`, the bump (version file, changelog, `updates`) is part of the pull request, checked by a [`git-semver check-bump`](#git-semver-check-bump---base-rev---head-rev) job, and `release` with no subcommand, on a merge, does not bump, commit or push to the branch. For the root and each subdirectory it reads the version at the landed commit (`CICD_HEAD`, else `GITHUB_SHA`, else `HEAD`) and:
+
+| The version's tag (`vX.Y.Z` or `<subdir>/vX.Y.Z`) | What `release` does |
+|------------------------------------------------|---------------------|
+| does not exist | creates it, annotated, at the landed commit |
+| exists at the landed commit or an ancestor | nothing for that component |
+| exists at another commit, and this merge did not change the version file | nothing to release for that component |
+| exists at another commit, and this merge changed the version file to that version | fails (exit 1), naming the tag, the commit that holds it and the fix: bump to a higher version in a new pull request |
+
+Every component is checked before any tag is made, so a failure creates nothing. The new tags are then pushed one by one by name (`git push origin <tag>`, never `--force`, so a tag held elsewhere is never overwritten), with one `gh release create <tag> --generate-notes` each. When every version is already tagged it says so and exits 0, so a second run at the same commit does nothing. Whether the merge changed the version file is read from `CICD_BASE` (else `GITHUB_EVENT_BEFORE`); without one, or with the all-zero SHA, the file counts as changed, so a version already tagged elsewhere fails loudly rather than passing.
+
+- The `latest` tag is not created or moved on this path.
+- The commit-subject rules (`chore: bump version`, `chore: install`) are not consulted.
+- A manual run releases the current commit the same way. The bump inputs do not apply: a non-empty `bump_type`, `subdirectory` or `changelog_description` is refused with the reason and the command to use instead (`git-semver bump <type> --no-push` on a branch). Declare no inputs on such a job.
+- Two pull requests can each bump to the same version without a git conflict; the second to merge fails here. Turn on "require branches to be up to date before merging" on the release branch so the second has to re-run `check-bump` against the first.
+
+`release bump`, `release publish` and the default `bump_on: merge` behave as before.
 
 ### Releasing with git-cicd (instead of version-bump.yml)
 
