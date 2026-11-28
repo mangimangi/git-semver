@@ -99,9 +99,11 @@ def read_registry(vendor_name):
 def _extract_vendor_registry(raw, vendor_name=None):
     """Extract registry fields from a per-vendor config file's contents.
 
-    Prefers .registry file in manifests/ (new path). Falls back to _vendor
-    key in config, then treats all top-level keys as registry fields
-    (backwards compat with pre-_vendor configs).
+    A file under .vendored/configs/ is a vendor only when a registry says
+    so: a .vendored/manifests/<vendor>.registry file, a _vendor block in
+    the file, or (the pre-_vendor form) top-level registry fields that
+    include `repo`. Returns None for any other file: it is the repository's
+    own configuration (for example a tool's job config in its own repo).
     """
     if vendor_name:
         registry = read_registry(vendor_name)
@@ -109,7 +111,9 @@ def _extract_vendor_registry(raw, vendor_name=None):
             return registry
     if "_vendor" in raw:
         return dict(raw["_vendor"])
-    return dict(raw)
+    if "repo" in raw:
+        return dict(raw)
+    return None
 
 
 def load_config(config_path=CONFIG_PATH):
@@ -134,7 +138,9 @@ def load_config(config_path=CONFIG_PATH):
                 filepath = os.path.join(CONFIGS_DIR, filename)
                 with open(filepath) as f:
                     raw = json.load(f)
-                vendors[vendor_name] = _extract_vendor_registry(raw, vendor_name)
+                registry = _extract_vendor_registry(raw, vendor_name)
+                if registry is not None:
+                    vendors[vendor_name] = registry
             return {"vendors": vendors}
 
     # Fallback to monolithic config.json
@@ -281,6 +287,35 @@ def vendor_name_for(repo):
     return name
 
 
+def _auth_env(env, url, header=None):
+    """Add an http extra header for `url` to `env` through GIT_CONFIG_*.
+
+    `http.extraHeader` is multi-valued and git sends every value that
+    applies, so a header inherited from the working repository's local
+    config (actions/checkout leaves one for github.com there) or from the
+    caller's GIT_CONFIG_* would be sent next to, or instead of, the
+    installer's own. An empty value resets the list: it is added first,
+    under the exact URL (the most specific match there is, and read after
+    every config file), then `header` when given. The caller's
+    GIT_CONFIG_PARAMETERS (the `-c` of a parent git) is read after
+    GIT_CONFIG_COUNT and would come after the reset, so it is dropped.
+    The header never goes in argv, a URL or a config file.
+    """
+    env.pop("GIT_CONFIG_PARAMETERS", None)
+    # Appended after any GIT_CONFIG_* entries already in the environment.
+    try:
+        n = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        n = 0
+    key = f"http.{url}.extraHeader" if url else "http.extraHeader"
+    values = [""] + ([header] if header else [])
+    for i, value in enumerate(values):
+        env[f"GIT_CONFIG_KEY_{n + i}"] = key
+        env[f"GIT_CONFIG_VALUE_{n + i}"] = value
+    env["GIT_CONFIG_COUNT"] = str(n + len(values))
+    return env
+
+
 def _git_env(token, url=None):
     """Environment that hands `token` to git for one command only.
 
@@ -288,31 +323,25 @@ def _git_env(token, url=None):
     GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>: never in argv or a URL, never
     written to a git config file. With `url`, the header is scoped to that
     URL (`http.<url>.extraHeader`), so it is sent to the vendor's host and
-    nowhere else. With no token, git reads anonymously.
+    nowhere else. Every header that would otherwise apply is reset first
+    (see _auth_env), so git sends exactly the installer's one header, or
+    none and reads anonymously when there is no token.
     GIT_TERMINAL_PROMPT=0 makes a missing credential fail instead of hang.
     """
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
+    header = None
     if token:
-        # Appended after any GIT_CONFIG_* entries already in the environment.
-        try:
-            n = int(env.get("GIT_CONFIG_COUNT", "0"))
-        except ValueError:
-            n = 0
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        key = f"http.{url}.extraHeader" if url else "http.extraHeader"
-        env["GIT_CONFIG_COUNT"] = str(n + 1)
-        env[f"GIT_CONFIG_KEY_{n}"] = key
-        env[f"GIT_CONFIG_VALUE_{n}"] = f"Authorization: Basic {basic}"
-    return env
+        header = f"Authorization: Basic {basic}"
+    return _auth_env(env, url, header)
 
 
-def ls_remote_tags(repo, token):
-    """List a vendor's tags with `git ls-remote --tags`.
+def ls_remote(repo, token):
+    """List a vendor's tags: (tags, None), or (None, git's message).
 
-    Returns a dict tag -> commit, or None when the repo cannot be read. For
-    an annotated tag the peeled `refs/tags/X^{}` line gives the commit; a
-    lightweight tag's own sha is its commit.
+    git's stderr is kept so a failure can say why; it never holds the token
+    (git does not echo headers), and it is scrubbed of it all the same.
     """
     url = vendor_git_url(repo)
     result = subprocess.run(
@@ -320,10 +349,27 @@ def ls_remote_tags(repo, token):
         capture_output=True, text=True, env=_git_env(token, url),
     )
     if result.returncode != 0:
-        return None
+        return None, _scrub(result.stderr, token)
+    return _parse_ls_remote(result.stdout), None
+
+
+def ls_remote_tags(repo, token):
+    """List a vendor's tags with `git ls-remote --tags`.
+
+    Returns a dict tag -> commit, or None when the repo cannot be read.
+    """
+    return ls_remote(repo, token)[0]
+
+
+def _parse_ls_remote(stdout):
+    """Tag -> commit from `git ls-remote --tags` output.
+
+    For an annotated tag the peeled `refs/tags/X^{}` line gives the commit;
+    a lightweight tag's own sha is its commit.
+    """
     tags = {}
     peeled = {}
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         parts = line.split("\t")
         if len(parts) != 2 or not parts[1].startswith("refs/tags/"):
             continue
@@ -338,9 +384,11 @@ def ls_remote_tags(repo, token):
 
 def list_tags(repo, token):
     """Tag -> commit for a vendor, or exit when the repo cannot be read."""
-    tags = ls_remote_tags(repo, token)
+    tags, detail = ls_remote(repo, token)
     if tags is None:
         print(f"::error::Cannot access repo: {repo}")
+        if detail:
+            print(detail)
         print(f"Ensure the repo exists; a private vendor needs "
               f"{READ_TOKEN_ENV} (or {WRITE_TOKEN_ENV}).")
         sys.exit(1)
@@ -1213,7 +1261,11 @@ def install_existing_vendor(vendor_name, vendor_config, requested_version,
     """Update path: resolve version, skip if current, run install.sh."""
     if installing_set is None:
         installing_set = []
-    repo = vendor_config["repo"]
+    repo = vendor_config.get("repo")
+    if not repo:
+        print(f"::error::Vendor '{vendor_name}' has no repo in its registry "
+              f"(.vendored/manifests/{vendor_name}.registry)")
+        sys.exit(1)
     if repo in installing_set:
         chain = " -> ".join(installing_set) + " -> " + repo
         print(f"::error::Circular dependency detected: {chain}")
@@ -1423,24 +1475,36 @@ def _scrub(text, token):
     return text
 
 
+def _push_url():
+    """origin's push URL, or github.com's root when it cannot be read."""
+    result = subprocess.run(
+        ["git", "remote", "get-url", "--push", "origin"],
+        capture_output=True, text=True,
+    )
+    url = (result.stdout or "").strip() if result.returncode == 0 else ""
+    return url or "https://github.com/"
+
+
 def push_branch(branch, token=None):
     """Push the install branch, with `token` when given.
 
     --force-with-lease: these install branches are ephemeral automation
     artifacts; a stale remote ref from a prior run must not block the push.
 
-    With a token (the write token), it is passed as an http.extraheader for
-    github.com in the command's own -c options: never printed, never written
-    to .git/config. actions/checkout persists its own GITHUB_TOKEN header
-    under the same key, so an empty value is given first, which resets the
-    list of headers, and then the token's header.
+    With a token (the write token), it is passed as an http.extraHeader for
+    origin's push URL through GIT_CONFIG_* (see _auth_env): never in argv,
+    never printed, never written to .git/config. actions/checkout persists
+    its own GITHUB_TOKEN header in the local config, so the headers are reset
+    first and git sends the token's header alone. Without a token, git
+    pushes with what the checkout configured.
     """
-    cmd = ["git"]
+    env = None
     if token:
-        key = "http.https://github.com/.extraheader"
-        cmd += ["-c", f"{key}=", "-c", f"{key}={_auth_header(token)}"]
-    cmd += ["push", "--force-with-lease", "-u", "origin", branch]
-    return subprocess.run(cmd, capture_output=True, text=True)
+        env = _auth_env(os.environ.copy(), _push_url(), _auth_header(token))
+    return subprocess.run(
+        ["git", "push", "--force-with-lease", "-u", "origin", branch],
+        capture_output=True, text=True, env=env,
+    )
 
 
 def workflow_files_note(results, paths):
@@ -1740,6 +1804,9 @@ def migrate_project_configs():
         vendor_filepath = os.path.join(CONFIGS_DIR, filename)
         with open(vendor_filepath) as f:
             vendor_data = json.load(f)
+        if _extract_vendor_registry(vendor_data, vendor_name) is None:
+            # The repository's own config, not a vendor's: leave it alone
+            continue
 
         # Merge: project config keys go to top level, never overwrite _vendor
         for key, value in project_config.items():
@@ -2099,6 +2166,11 @@ def main():
         )
         output_result(result)
         results = [result]
+    elif os.path.isfile(os.path.join(CONFIGS_DIR, f"{args.target}.json")):
+        # The repository's own config (no registry): not a vendor
+        print(f"::error::'{args.target}' is not a registered vendor: "
+              f"{CONFIGS_DIR}/{args.target}.json has no registry")
+        sys.exit(1)
     else:
         print(f"::error::Unknown vendor: {args.target}")
         print(f"Registered vendors: {', '.join(sorted(vendors.keys()))}")
