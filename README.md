@@ -20,8 +20,10 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 ### Via curl (initial install)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mangimangi/git-semver/latest/install.sh | bash -s <version>
+curl -fsSL https://raw.githubusercontent.com/mangimangi/git-semver/main/install.sh | bash -s <version>
 ```
+
+`<version>` is a release such as `0.1.0` (see the repository's tags); the installer fetches that version's files from its tag. The script is read from `main`, not from a `latest` tag, which the bump-in-the-pull-request path no longer moves.
 
 ### Via GitHub Actions (ongoing updates)
 
@@ -384,6 +386,17 @@ It reads the run from git-cicd's variables when they are set and from the GitHub
 
 `gh` reads its token from `GH_TOKEN` or `GITHUB_TOKEN` (git-cicd's merge and manual workflows pass `GITHUB_TOKEN`). `release bump` and `release publish` are unchanged; `version-bump.yml` keeps calling them.
 
+### Two ways to release
+
+| | Bump on merge (default) | Bump in the pull request |
+|-|-------------------------|--------------------------|
+| Setting | `bump_on` absent or `"merge"` | `"bump_on": "pull_request"` |
+| Runs | `version-bump.yml` (the default install), or a git-cicd job calling `release` with no subcommand | git-cicd: an `open` job running `git-semver check-bump` on pull requests into the release branch, and a `merge` job calling `release` with no subcommand |
+| Who bumps | the release run, after the merge: a `chore: bump version` commit | the pull request's author, with `git-semver bump patch --no-push` (or `minor`/`major`); the check fails until they do |
+| What is tagged | the bump commit, which ran no pull request checks | the merged commit, which did |
+| `latest` tag | created and moved | not created or moved |
+| Branch protection | the workflow must be able to push to the default branch; when it cannot, the bump falls back to a pull request opened with the workflow's own token, which starts no checks and has to be merged by hand | needs no write access to the branch, only to push tags; turn on "require branches to be up to date before merging" so two pull requests that bump to the same version cannot both land (if one does, the release refuses it loudly instead of tagging) |
+
 ### Bumping in the pull request (`bump_on: pull_request`)
 
 With `"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`, the bump (version file, changelog, `updates`) is part of the pull request, checked by a [`git-semver check-bump`](#git-semver-check-bump---base-rev---head-rev) job, and `release` with no subcommand, on a merge, does not bump, commit or push to the branch. For the root and each subdirectory it reads the version at the landed commit (`CICD_HEAD`, else `GITHUB_SHA`, else `HEAD`) and:
@@ -531,6 +544,7 @@ git-semver's own pull request checks (and its release, below) run through [git-c
 |-----|-----|------|
 | `test` | `Open / Unit Tests / git-semver:test` | `ci/setup.sh` (installs the Python floor from `requires-python` in `pyproject.toml`, plus pytest, coverage and pyyaml, into a venv, and bats-core), then `ci/test.sh` (pytest under coverage, the coverage gate, then the bats tests in `tests/bats/`) |
 | `vendor-check` | `Open / Vendor Check / git-semver:vendor-check` | `.vendored/check` |
+| `version-check` | `Open / Version Check / git-semver:version-check` | `git-semver check-bump` at the repository root (pull requests into `main` only): fails when a file in `files` changed and `VERSION` was not raised |
 
 Documents and tracker records (`*.md` at the root, `docs/**`, `commands/*.md`, `LICENSE`, `.pearls` issues, archive and docs, `.madreperla/sessions.jsonl`) need no job. The result is the `Verdict / git-cicd:verdict` commit status on the pull request's head commit.
 
@@ -547,14 +561,18 @@ Run the same checks locally:
 
 ### How a release happens here
 
-git-semver releases itself through git-cicd too, with a `release` job in `.vendored/configs/git-cicd.json`:
+git-semver releases itself through git-cicd, bumping in the pull request (`"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`):
 
 | Job | Row | Runs |
 |-----|-----|------|
+| `version-check` | `Open / Version Check / git-semver:version-check` | `git-semver check-bump` at the repository root, on pull requests into `main` |
 | `release` | `Merge / Release / git-semver:release`, `Manual / Release / git-semver:release` | `release` at the repository root, with no subcommand |
 
-- **On every merge to `main`** the job runs this repository's own `release` (the root script, not the vendored copy under `.vendored/pkg/git-semver/`, which only gets a new entry point once a release is installed back). A merge that changed a file listed in `files` in `.vendored/configs/git-semver.json` is bumped (a patch) and the bump commit pushed; a merged `chore: bump version` commit is tagged and gets a GitHub Release; a `chore: install` commit does nothing.
-- **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, with `job` = `release` and `inputs` = a JSON object of `bump_type` (`patch`, `minor` or `major`; default `patch`), `subdirectory` and `changelog_description`, for example `{"bump_type": "minor", "changelog_description": "One-step release"}`.
+Both run this repository's own scripts (the root `git-semver` and `release`, not the vendored copies under `.vendored/pkg/git-semver/`, which only get a new entry point once a release is installed back), so a change is checked and released by the code on its branch.
+
+- **In the pull request into `main`**: a change to a file listed in `files` bumps `VERSION` in the same pull request, with `./git-semver bump patch --no-push` (or `minor`/`major`). `version-check` fails until it does and prints that command. Pull requests into an integration branch (`plan/**`) are not checked; the pull request into `main` bumps once.
+- **On every merge to `main`** the job tags the merged commit with the version it carries (`vX.Y.Z`), pushes the tag and creates its GitHub Release. Nothing is pushed to `main`, and the `latest` tag is not moved. A merge whose version is already released does nothing; a merge that set a version already tagged at another commit fails and names it.
+- **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, with `job` = `release`, releases the current commit the same way. The job declares no inputs; a minor or major bump is made in a pull request.
 
 ### How vendored tools are updated here
 

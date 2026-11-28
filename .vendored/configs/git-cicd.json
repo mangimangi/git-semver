@@ -15,27 +15,19 @@
       "paths": ["**"],
       "steps": [".vendored/check"]
     },
+    "version-check": {
+      "name": "Version Check",
+      "on": ["open"],
+      "branches": ["main"],
+      "paths": ["**"],
+      "steps": [["git-semver", "check-bump"]]
+    },
     "release": {
       "name": "Release",
       "on": ["merge"],
       "branches": ["main"],
       "paths": ["**"],
-      "steps": ["release"],
-      "inputs": {
-        "bump_type": {
-          "description": "Version bump type",
-          "choices": ["patch", "minor", "major"],
-          "default": "patch"
-        },
-        "subdirectory": {
-          "description": "Subdirectory to bump (leave empty for root)",
-          "default": ""
-        },
-        "changelog_description": {
-          "description": "Changelog entry text (leave empty to collect from commits)",
-          "default": ""
-        }
-      }
+      "steps": ["release"]
     },
     "update-vendored": {
       "name": "Install Vendored",
