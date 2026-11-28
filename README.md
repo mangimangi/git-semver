@@ -597,7 +597,7 @@ Every component is checked before any tag is made, so a failure creates nothing.
 then run `.vendored/pkg/git-cicd/git-cicd generate` and commit the generated `git-cicd-merge.yml` and `git-cicd-manual.yml`.
 
 - **On merge** to `main`, `release` tests the landed commit: a bump commit is tagged and released, an install commit is left alone, anything else is bumped (see [`release` with no subcommand](#release-with-no-subcommand)). `paths: ["**"]` makes every merge reach `release`; whether a bump is needed is `git-semver bump-all`'s decision. Keep `VERSION` out of `needs_nothing`, or a bump commit would need no job and never be published.
-- **By hand**, the Actions tab's **Manual** workflow runs the job with `job` = `release` and `inputs` = a JSON object such as `{"bump_type": "minor", "subdirectory": "backend"}`; the inputs reach `release` as `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY` and `CICD_INPUT_CHANGELOG_DESCRIPTION`.
+- **By hand**, the Actions tab's **Manual** workflow runs the job: pick `release` in its `job` dropdown and fill the named fields the job declares (for example `bump_type` = `minor`, `subdirectory` = `backend`); the inputs reach `release` as `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY` and `CICD_INPUT_CHANGELOG_DESCRIPTION`.
 - git-cicd's merge and manual workflows already give the job `contents: write` and `pull-requests: write`, fetch all history and tags, pass `GITHUB_TOKEN` (which `gh` reads) and run one after another, as `version-bump.yml`'s concurrency group does.
 
 ### Publishing after a release
@@ -653,7 +653,7 @@ Squash merges work correctly: GitHub uses the PR title as the squash commit mess
 | Workflow | Auth | Notes |
 |----------|------|-------|
 | `version-bump.yml` | `GITHUB_TOKEN` | No PAT required |
-| `install-vendored.yml` | `GITHUB_TOKEN` / `VENDOR_PAT` | `VENDOR_PAT` only needed for private vendor repos |
+| `install-vendored.yml` | `GITHUB_TOKEN` / `CICD_WRITE_TOKEN` | `CICD_WRITE_TOKEN` (the deprecated `VENDOR_PAT` is still accepted) only needed for private vendor repos |
 | git-cicd version check job (`git-semver check-bump`, `bump_on: pull_request`) | `CICD_WRITE_TOKEN` | Optional; lets the check push the missing patch bump to the pull request branch. Needs Contents: read and write on the repository (fine-grained PAT or App token; a `GITHUB_TOKEN` push starts no workflow). Declare it with `"secrets": ["CICD_WRITE_TOKEN"]` on the job. Without it the check only fails and names the command |
 
 ## Vendor Management
@@ -693,9 +693,9 @@ git-semver's own pull request checks (and its release, below) run through [git-c
 |-----|-----|------|
 | `test` | `Open / Unit Tests / git-semver:test` | `ci/setup.sh` (installs the Python floor from `requires-python` in `pyproject.toml`, plus pytest, coverage and pyyaml, into a venv, and bats-core), then `ci/test.sh` (pytest under coverage, the coverage gate, then the bats tests in `tests/bats/`) |
 | `vendor-check` | `Open / Vendor Check / git-semver:vendor-check` | `.vendored/check` |
-| `version-check` | `Open / Version Check / git-semver:version-check` | `git-semver check-bump` at the repository root (pull requests into `main` only): fails when a file in `files` changed and `VERSION` was not raised (the job does not declare `CICD_WRITE_TOKEN` yet, so the bump is not pushed for you here) |
+| `version-check` | `Open / Version Check / git-semver:version-check` | `git-semver check-bump` at the repository root (pull requests into `main` only): fails when a file in `files` changed and `VERSION` was not raised; the job declares `"secrets": ["CICD_WRITE_TOKEN"]`, so with that secret set it pushes the missing patch bump to the pull request branch and the pushed commit's run is the one that passes |
 
-Documents and tracker records (`*.md` at the root, `docs/**`, `commands/*.md`, `LICENSE`, `.pearls` issues, archive and docs, `.madreperla/sessions.jsonl`) need no job. The result is the `Verdict / git-cicd:verdict` commit status on the pull request's head commit.
+The three jobs only run on pull requests (`"manual": false`), so the Manual workflow does not offer them. Documents and tracker records (`*.md` at the root, `docs/**`, `commands/*.md`, `LICENSE`, `.pearls` issues, archive and docs, `.madreperla/sessions.jsonl`) need no job; a run that needs none shows the row `Nothing needed / git-semver:(nothing)`. The result is the `Verdict / git-cicd:verdict` commit status on the pull request's head commit.
 
 The `test` job measures line coverage of the two shipped Python scripts, `git-semver` and `release`, including runs a test starts as a subprocess, prints the per-file report with missing lines, and fails when the total or either file is below 99% (`[tool.coverage.*]` in `pyproject.toml`). `install.sh` and the scripts under `ci/` are tested with bats (`tests/bats/*.bats`); each test runs the script in a sandbox whose PATH holds only stubs and a few system tools and whose runner tool cache is an empty directory, so no test depends on the Pythons the machine has.
 
@@ -719,7 +719,7 @@ git-semver releases itself through git-cicd, bumping in the pull request (`"bump
 
 Both run this repository's own scripts (the root `git-semver` and `release`, not the vendored copies under `.vendored/pkg/git-semver/`, which only get a new entry point once a release is installed back), so a change is checked and released by the code on its branch.
 
-- **In the pull request into `main`**: a change to a file listed in `files` bumps `VERSION` in the same pull request, with `./git-semver bump patch --no-push` (or `minor`/`major`). `version-check` fails until it does and prints that command. Pull requests into an integration branch (`plan/**`) are not checked; the pull request into `main` bumps once.
+- **In the pull request into `main`**: a change to a file listed in `files` bumps `VERSION` in the same pull request, with `./git-semver bump patch --no-push` (or `minor`/`major`). `version-check` fails until it does and prints that command; with the `CICD_WRITE_TOKEN` secret set it pushes the missing patch bump to the pull request branch itself. Pull requests into an integration branch (`plan/**`) are not checked; the pull request into `main` bumps once.
 - **On every merge to `main`** the job tags the merged commit with the version it carries (`vX.Y.Z`), pushes the tag and creates its GitHub Release. Nothing is pushed to `main`, and the `latest` tag is not moved. A merge whose version is already released does nothing; a merge that set a version already tagged at another commit fails and names it.
 - **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, with `job` = `release`, releases the current commit the same way. The job declares no inputs; a minor or major bump is made in a pull request.
 
@@ -732,9 +732,9 @@ The vendored tools (git-cicd, git-semver, git-vendored) are updated by the `upda
 | `update-vendored` | `Cron / Install Vendored / git-semver:update-vendored`, `Manual / Install Vendored / git-semver:update-vendored` | `ci/update-vendored.sh`: `.vendored/install <vendor> --version <version> --pr --deps=install` (plus `--private` when `private` is `true`) |
 
 - **Every Monday at 09:00 UTC** (`cron` `0 9 * * 1`) it runs on `main` for all vendors at their latest version and opens a pull request for each update.
-- **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, with `job` = `update-vendored` and `inputs` = a JSON object of `vendor` (default `all`), `version` (default `latest`) and `private` (`true` or `false`; default `false`, `true` uses `VENDOR_PAT`), for example `{"vendor": "git-cicd", "version": "latest"}`.
+- **By hand**: Actions tab → **Manual** → *Run workflow* on `main`, pick `update-vendored` in the `job` dropdown and fill its named fields: `vendor` (default `all`), `version` (default `latest`) and `private` (a `true`/`false` dropdown, default `false`; `true` installs from a private vendor repository, which `CICD_WRITE_TOKEN` must be able to read).
 
-The inputs reach the script as `CICD_INPUT_*` variables and are passed to `.vendored/install` as separate arguments, never through a shell. `GH_TOKEN` is the `VENDOR_PAT` secret when it is set, else the workflow's `GITHUB_TOKEN`.
+The inputs reach the script as `CICD_INPUT_*` variables and are passed to `.vendored/install` as separate arguments, never through a shell. The job declares `"secrets": ["CICD_WRITE_TOKEN", "VENDOR_PAT"]` (git-cicd gives a job only the secrets it declares). `GH_TOKEN` is the `CICD_WRITE_TOKEN` secret when it is set, else the deprecated `VENDOR_PAT`, else the workflow's `GITHUB_TOKEN`; set `CICD_WRITE_TOKEN` so the install pull requests get their checks (a pull request opened with `GITHUB_TOKEN` starts no workflow). The script never prints a token.
 
 ### Vendor lifecycle
 

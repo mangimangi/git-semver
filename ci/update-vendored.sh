@@ -8,10 +8,12 @@
 # version and private flag are the job's declared inputs, read from
 # CICD_INPUT_VENDOR, CICD_INPUT_VERSION and CICD_INPUT_PRIVATE (defaults all,
 # latest, false) and passed to .vendored/install as separate arguments, never
-# through a shell. GH_TOKEN is VENDOR_PAT when it is set, else GITHUB_TOKEN.
+# through a shell. GH_TOKEN is CICD_WRITE_TOKEN when it is set, else the
+# deprecated VENDOR_PAT, else the workflow's GITHUB_TOKEN (the job declares
+# "secrets": ["CICD_WRITE_TOKEN", "VENDOR_PAT"]). No token is ever printed.
 set -euo pipefail
 
-export GH_TOKEN="${VENDOR_PAT:-${GITHUB_TOKEN:-}}"
+export GH_TOKEN="${CICD_WRITE_TOKEN:-${VENDOR_PAT:-${GITHUB_TOKEN:-}}}"
 ARGS=("${CICD_INPUT_VENDOR:-all}" --version "${CICD_INPUT_VERSION:-latest}"
       --pr --deps=install)
 if [ "${CICD_INPUT_PRIVATE:-false}" = "true" ]; then
