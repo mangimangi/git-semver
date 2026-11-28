@@ -31,21 +31,21 @@ The owner, 2026-11-28: "I like option 1 [no bump commit on `main`; the release t
 
 ## What ships
 
-- A check that the version was bumped, for a pull request
+- A check that the version was bumped, for a pull request — **gsv-bbc9.1** (`git-semver check-bump`)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
   - affected surface: `git-semver` (a new subcommand beside `cmd_check` line 448 and `cmd_bump` line 484), `tests/`, `README.md`, `docs/`
   - shape: A read-only command compares the change under test with its base: for the root and for each configured subdirectory, when a changed file matches that component's `files`, the version in its version file must be a valid version higher than the base's; otherwise the command fails, names the component, the base version and the version found, and prints the exact command that fixes it (`git-semver bump ...`). When no configured file changed it passes and says so. A version file that changed without any configured file changing passes when the version went up and fails when it went down or is malformed. It takes the base and head from git-cicd's variables (`CICD_BASE`, `CICD_HEAD`) when set and from arguments otherwise, needs only the local repository (no token, no network), and never writes. It is suitable as a step of an `open` job: `"steps": [[".vendored/pkg/git-semver/git-semver", "<subcommand>"]]`.
 
-- A release that tags the landed commit and pushes nothing to the branch
+- A release that tags the landed commit and pushes nothing to the branch — **gsv-bbc9.2** (`"bump_on": "pull_request"`)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
   - affected surface: `release` (`cmd_auto` line 351, `create_releases`), `git-semver` (`cmd_tag` line 593, the `latest` tagging at lines 509 and 584), `.vendored/configs/git-semver.json` schema (`templates/config.schema`), `tests/`, `README.md`
   - shape: A repository chooses this mode in its git-semver config (one documented setting; the default stays today's behaviour). In this mode `release` with no subcommand, on a merge, does not bump and does not push to the branch: for each component whose version has no tag yet, it creates the annotated tag (`vX.Y.Z`, or `<subdir>/vX.Y.Z`) at the landed commit, pushes the tags, and creates the GitHub release for each; when every version is already tagged at this commit or an ancestor it does nothing and exits 0. When a version to tag already has a tag at a commit that is not this one and the version file did not change in this merge, there is nothing to release; when the merge changed the version file to a version already tagged at another commit, it fails with a message naming the version, the commit that holds the tag and what to do. It does not create or move a `latest` tag. A manual run in this mode releases the current commit the same way (the bump inputs do not apply and are refused with a reason). `git-semver released` reports what was tagged at the commit, as before. The commit-message rules (`chore: bump version`, `chore: install`) are not needed in this mode and are not consulted.
 
-- git-semver's own repository releases this way
+- git-semver's own repository releases this way — **gsv-bbc9.3** (blocked by gsv-bbc9.1 and gsv-bbc9.2)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
@@ -68,3 +68,26 @@ The owner, 2026-11-28: "I like option 1 [no bump commit on `main`; the release t
 - Deleting the existing `latest` tag from the remote (an owner step), marking a release as defective, or anything else about how versions move.
 - Changing what `install.sh` installs, or migrating git-cicd, git-vendored or any other repository (units 12 and 13 of the plan).
 - Replacing `gh release create` with a platform adapter.
+
+## Issues
+
+| Issue | Scope |
+|---|---|
+| gsv-bbc9.1 | `git-semver check-bump` subcommand, its tests, README command entry |
+| gsv-bbc9.2 | `bump_on: pull_request` mode in `release` (tag landed commit, push tags only, one `gh release create` per new tag, refuse duplicate version, no `latest`), schema + README key, tests |
+| gsv-bbc9.3 | This repo: config selects the mode, `version-check` open job, regenerated workflows, VERSION 0.0.16 → 0.1.0, README/AGENTS.md release docs, bootstrap URL off `latest` (blocked by .1 and .2) |
+
+## Refinement decisions
+
+- **Subcommand name `check-bump`** (gsv-bbc9.1): it sits next to `check` and leaves `check`'s meaning as it is (exit 0 = a bump is needed).
+- **`--base`/`--head` arguments win over `CICD_BASE`/`CICD_HEAD`; head defaults to HEAD** (gsv-bbc9.1): this is the usual CLI order, and CI passes no arguments, so it still uses the env vars as the doc asks.
+- **Compare against the version at `<base>` (the target branch tip) and take changed files as `<base>...<head>`** (gsv-bbc9.1): the doc says the version must be higher than the target branch's, and git-cicd's `changed_files` uses a three-dot diff.
+- **A component with no `files` is skipped, not an error** (gsv-bbc9.1): a check step must not fail on a component that has nothing configured.
+- **Mode setting is a top-level `"bump_on": "merge" | "pull_request"` (default `merge`) in `.vendored/configs/git-semver.json`, and `release` reads it from git-semver's config path, not `.semver/config.json`** (gsv-bbc9.2): the doc puts the mode in the git-semver config and its schema, and `release`'s own `CONFIG_PATH` only holds the `install` settings.
+- **Push each new tag by name, without `--force`** (gsv-bbc9.2): `--tags --force` would overwrite a tag held at another commit, the case the doc says must fail loudly.
+- **Check every component before creating any tag** (gsv-bbc9.2): if the run fails on a duplicate version, it leaves no partial tags behind.
+- **Treat a missing or all-zero base as "version file changed"** (gsv-bbc9.2): that is the safe choice, because a version already tagged elsewhere then fails instead of passing silently.
+- **A manual run is refused when any bump input is non-empty** (gsv-bbc9.2) **and this repo's `release` job drops its `inputs`** (gsv-bbc9.3): git-cicd passes declared inputs with their defaults (`bump_type=patch`), so the inputs have to go before a manual run can proceed.
+- **The `version-check` job runs only on PRs into `main` and uses the root `git-semver`** (gsv-bbc9.3): the doc limits the check to release branches, and the root script means the check runs the branch's own code, as the root `release` already does.
+- **Bump VERSION from 0.0.16 to 0.1.0 (minor)** (gsv-bbc9.3): the release model changes, which counts as a feature, and any increase satisfies the check.
+- **The bootstrap curl URL uses `main` instead of `latest`** (gsv-bbc9.3): the doc drops `latest`, and `install.sh` must not change.
