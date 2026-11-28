@@ -163,6 +163,53 @@ git-semver released              # e.g. v1.4.0
 git-semver released "$CICD_HEAD" # ask about a specific commit
 ```
 
+### Labels (`git-deps.labels.json`)
+
+A **label** is something the publisher says about a version it already released. The first label is `defect`: the version should not be used (it cannot run, it broke its adopters), usually with the version that fixes it. A version tag is never moved or deleted to say this; the label sits beside it in a file.
+
+The file is `git-deps.labels.json` at the root of the repository, and what counts is the copy on the default branch: whoever keeps that branch vouches for it. A reader such as [git-deps](https://github.com/mangimangi/git-deps) reads it through git; nothing calls a platform. This section is the contract such a reader relies on; [`templates/labels.schema`](templates/labels.schema) is the same format as a JSON Schema.
+
+```json
+{
+  "format": 1,
+  "versions": {
+    "v0.1.2": [
+      {
+        "name": "defect",
+        "reason": "medici init fails on a fresh checkout",
+        "date": "2026-11-28",
+        "commit": "455ee13c1f0e5d8b7a2f3e9c6d4b1a0f8e7d6c5b",
+        "fixed_in": "0.1.3"
+      }
+    ],
+    "backend/v2.3.0": [
+      {
+        "name": "defect",
+        "reason": "migrations drop the sessions table",
+        "date": "2026-11-28",
+        "commit": "0123456789abcdef0123456789abcdef01234567"
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `format` | integer, required | Format version of the file. This is format `1`; a reader refuses a higher format it does not know |
+| `versions` | object, required | Labels per released version, keyed by the full version tag name as `git tag` shows it: `vX.Y.Z` for the root, `<subdir>/vX.Y.Z` for a [subdirectory component](#subdirectory-configs-monorepo-support). Each value is a list of labels |
+| `name` | string, required | The label. git-semver makes `defect`; a reader ignores a name it does not know (for example a later `eol`) |
+| `reason` | string | Why, in one line (no newline). `git-semver label` requires it for `defect` |
+| `date` | string, required | UTC date the label was made, `YYYY-MM-DD` |
+| `commit` | string, required | The 40-hex commit the version's tag pointed at when the label was made. A pin is a version and a sha: a reader can tell a label applies to the commit it holds |
+| `fixed_in` | string | The version (`X.Y.Z`, same component) that fixes it, when there is one |
+
+**Strict about structure, tolerant about content.** git-semver refuses a file, with a message naming what is wrong and where (for example `versions['v0.1.2'][0]: 'commit' must be a 40-hex commit sha`), when it is not valid JSON, the top level is not an object, `format` is missing, not an integer or not `1`, `versions` is missing or not an object, a key is not a version tag, a value is not a list, or a label is not an object or has a missing or ill-typed `name`, `commit` or `date`, a `reason` that is not a one-line string, or a `fixed_in` that is not an `X.Y.Z` version. It keeps, ignores and writes back unchanged a label name it does not know, an extra field on a label and an extra top-level key. A missing file means no labels.
+
+**Stable under version control.** git-semver writes the file as JSON indented by two spaces, with a trailing newline and non-ASCII characters as they are. Top-level keys are `format`, `versions`, then unknown keys in the order read; versions are sorted by component (root first, then subdirectories by name), then by version precedence (`v0.9.0` before `v0.10.0`); labels in a version are sorted by name, with fields in the order `name`, `reason`, `date`, `commit`, `fixed_in`, then unknown fields in the order read. Reading and writing a file already in this form leaves it byte for byte the same, so a change shows as only the lines it touched.
+
+**`latest` is computed, not a tag.** A reader's latest version is the newest version no label rules out. git-semver does not keep a `latest` tag.
+
 ### `git-semver check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]`
 
 Fails a pull request that changes configured files without raising the version. For the root and for each subdirectory component, when a file changed on `<head>` since it left `<base>` (`git diff <base>...<head>`, as git-cicd computes a pull request's changed files) matches the component's `files`, the version in its `version_file` at `<head>` must be a valid `X.Y.Z` strictly higher than the one at `<base>` (the target branch). Any increase passes: patch, minor or major.

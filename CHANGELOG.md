@@ -2,6 +2,11 @@
 
 All notable changes to git-semver are recorded here.
 
+## [0.2.0] - 2026-11-28
+
+### Added
+- git-deps.labels.json: a documented, versioned labels file (format 1) git-semver reads and writes
+
 ## [0.1.2] - 2026-11-28
 
 ### Changed

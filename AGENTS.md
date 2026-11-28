@@ -9,6 +9,7 @@ Config-driven semantic versioning for git repos. By default file changes trigger
 | `git-semver` | Core Python script — `version`, `check`, `check-bump` (with fixing mode: commits and pushes a missing patch bump), `bump`, `bump-all`, `tag`, `released` subcommands |
 | `release` | CI orchestration — with no subcommand decides bump, publish or nothing, or with `bump_on: pull_request` tags the landed commit (called by the git-cicd `release` job); `bump`/`publish` are called by `version-bump.yml` |
 | `install.sh` | Installs git-semver into consumer repos |
+| `templates/labels.schema` | JSON Schema of `git-deps.labels.json` (format 1), the labels file `git-semver` reads and writes at a repository's root; the README section "Labels" is the contract |
 | `.vendored/configs/git-semver.json` | Versioning config for this repo (dogfooded) |
 | `.vendored/configs/git-cicd.json` | Pull request checks (including `version-check`) and the `release` job for this repo, run by git-cicd |
 | `ci/setup.sh`, `ci/test.sh` | Setup and step of the `test` job |

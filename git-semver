@@ -465,6 +465,159 @@ def bump_component(config, subdir=None, bump_type="patch", description=None):
     return subdir, current, new_version, tag
 
 
+# ── Labels ──────────────────────────────────────────────────────────────────
+#
+# git-deps.labels.json, at the repository root, says what the publisher
+# knows about released versions (README "Labels (git-deps.labels.json)").
+# Reading is strict about structure and tolerant about content: an unknown
+# label name, label field or top-level key is kept and written back as read.
+
+LABELS_FILE = "git-deps.labels.json"
+LABELS_FORMAT = 1
+# Label fields in the order they are written; unknown fields follow them.
+LABEL_FIELDS = ("name", "reason", "date", "commit", "fixed_in")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+LABEL_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def empty_labels():
+    """The content of a labels file with no labels."""
+    return {"format": LABELS_FORMAT, "versions": {}}
+
+
+def split_version_tag(tag):
+    """Split a version tag into (component, (major, minor, patch)).
+
+    The component is None for the root (`vX.Y.Z`) and the subdirectory for
+    `<subdir>/vX.Y.Z`. Raises SemverError for anything else.
+    """
+    if not isinstance(tag, str) or not VERSION_TAG_RE.fullmatch(tag):
+        raise SemverError(f"not a version tag: {tag!r}")
+    component, _, version = tag.rpartition("/")
+    return component or None, parse_version(version[1:])
+
+
+def version_tag_sort_key(tag):
+    """Root first, then subdirectories by name; versions by precedence."""
+    component, version = split_version_tag(tag)
+    return (component is not None, component or "", version)
+
+
+def _check_label(label, where):
+    """Raise SemverError unless `label` is a structurally valid label."""
+    if not isinstance(label, dict):
+        raise SemverError(f"{where}: a label must be an object")
+    name = label.get("name")
+    if not isinstance(name, str) or not name:
+        raise SemverError(f"{where}: 'name' must be a non-empty string")
+    commit = label.get("commit")
+    if not isinstance(commit, str) or not COMMIT_SHA_RE.match(commit):
+        raise SemverError(f"{where}: 'commit' must be a 40-hex commit sha")
+    date = label.get("date")
+    valid_date = isinstance(date, str) and LABEL_DATE_RE.match(date)
+    if valid_date:
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            valid_date = False
+    if not valid_date:
+        raise SemverError(f"{where}: 'date' must be a YYYY-MM-DD date")
+    if "reason" in label:
+        reason = label["reason"]
+        if not isinstance(reason, str) or "\n" in reason or "\r" in reason:
+            raise SemverError(f"{where}: 'reason' must be a one-line string")
+    if "fixed_in" in label:
+        fixed_in = label["fixed_in"]
+        if not isinstance(fixed_in, str) or _try_parse_version(fixed_in) is None:
+            raise SemverError(f"{where}: 'fixed_in' must be an X.Y.Z version")
+
+
+def parse_labels(text, source=LABELS_FILE):
+    """Parse and check the text of a labels file; returns its content.
+
+    Raises SemverError naming what is wrong, and where, when the structure
+    is not format 1. Unknown label names, label fields and top-level keys
+    are kept.
+    """
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise SemverError(f"{source}: invalid JSON: {e}")
+    if not isinstance(data, dict):
+        raise SemverError(f"{source}: the top level must be an object")
+    if "format" not in data:
+        raise SemverError(f"{source}: 'format' is missing")
+    fmt = data["format"]
+    if not isinstance(fmt, int) or isinstance(fmt, bool):
+        raise SemverError(f"{source}: 'format' must be an integer")
+    if fmt != LABELS_FORMAT:
+        raise SemverError(
+            f"{source}: format {fmt} is not supported (this git-semver reads "
+            f"format {LABELS_FORMAT})"
+        )
+    if "versions" not in data:
+        raise SemverError(f"{source}: 'versions' is missing")
+    versions = data["versions"]
+    if not isinstance(versions, dict):
+        raise SemverError(f"{source}: 'versions' must be an object")
+    for tag, labels in versions.items():
+        if not VERSION_TAG_RE.fullmatch(tag):
+            raise SemverError(
+                f"{source}: versions[{tag!r}]: not a version tag "
+                "(vX.Y.Z or <subdir>/vX.Y.Z)"
+            )
+        if not isinstance(labels, list):
+            raise SemverError(f"{source}: versions[{tag!r}]: must be a list of labels")
+        for i, label in enumerate(labels):
+            _check_label(label, f"{source}: versions[{tag!r}][{i}]")
+    return data
+
+
+def load_labels(path=LABELS_FILE):
+    """Read a labels file; a missing file reads as empty."""
+    p = Path(path)
+    if not p.exists():
+        return empty_labels()
+    return parse_labels(p.read_text(encoding="utf-8"), source=str(path))
+
+
+def _canonical_label(label):
+    """`label` with its known fields first, in LABEL_FIELDS order."""
+    out = {k: label[k] for k in LABEL_FIELDS if k in label}
+    out.update((k, v) for k, v in label.items() if k not in out)
+    return out
+
+
+def canonical_labels(data):
+    """`data` in the order it is written.
+
+    Top level: format, versions, then unknown keys as read. Versions by
+    component (root first), then version precedence. Labels by name (a
+    stable sort), fields in LABEL_FIELDS order, then unknown fields as read.
+    """
+    versions = data["versions"]
+    out = {
+        "format": data["format"],
+        "versions": {
+            tag: [_canonical_label(label)
+                  for label in sorted(versions[tag], key=lambda lb: lb["name"])]
+            for tag in sorted(versions, key=version_tag_sort_key)
+        },
+    }
+    out.update((k, v) for k, v in data.items() if k not in out)
+    return out
+
+
+def dump_labels(data):
+    """The text of a labels file holding `data`, in canonical form."""
+    return json.dumps(canonical_labels(data), indent=2, ensure_ascii=False) + "\n"
+
+
+def save_labels(path, data):
+    """Write `data` to the labels file at `path` in canonical form."""
+    Path(path).write_text(dump_labels(data), encoding="utf-8")
+
+
 # ── Subcommands ─────────────────────────────────────────────────────────────
 
 def cmd_version(args):
