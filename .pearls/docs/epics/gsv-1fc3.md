@@ -21,21 +21,21 @@ The owner, 2026-11-28: "the version bumps should feel seamless", and on this poi
 
 ## What ships
 
-- The check can raise the version itself
+- The check can raise the version itself — **gsv-1fc3.1**
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
   - affected surface: `git-semver` (`cmd_check_bump` line 570, `cmd_bump` and `bump_component`, the parser at line 861), `templates/config.schema`, `tests/`
   - shape: The version check gains a fixing mode. For the root and for each configured component whose configured files changed without a higher version than the base's, it raises the version by a patch, applies `updates`, writes the changelog entry the way `bump` does, and makes one commit whose message says which components were raised and from what to what. A component whose version is already higher is left alone; a version that went down or is malformed is an error, not something to fix. With nothing to fix it makes no commit. It needs only the local repository. The mode is chosen by the repository's config (default on with `"bump_on": "pull_request"`, with a documented setting for check only) and can be forced either way by an argument.
 
-- The fix is pushed to the pull request's branch, safely
+- The fix is pushed to the pull request's branch, safely — **gsv-1fc3.2** (blocked by gsv-1fc3.1)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
   - affected surface: `git-semver` or `release` (whichever owns pushing; `release` documents its tokens at lines 55-56), `tests/`
   - shape: After a fixing commit, the check pushes it to the pull request's source branch, taken from git-cicd's variables (`CICD_SOURCE_BRANCH`, with `CICD_TARGET_BRANCH`, `CICD_BASE`, `CICD_HEAD`) when set and from arguments otherwise. It pushes only with `CICD_WRITE_TOKEN`, given to git for that one push in a way that leaves it out of the repository's config, the process list and every message. It refuses, with a reason and without pushing, when the source branch is the target branch, is a release branch, does not exist on this repository's remote, or has moved on from the commit under test. When it pushed, it exits in a way that does not record a pass for the commit that lacked the bump, and says that the pushed commit's own run is the one to wait for. When it cannot push (no token; a refusal above) it fails exactly as the check does today, naming the command to run. Tests cover every branch of that decision with `git push` replaced at the boundary the existing tests use.
 
-- The suite cannot read a real token; the docs say how the bump happens
+- The suite cannot read a real token; the docs say how the bump happens — **gsv-1fc3.3** (blocked by gsv-1fc3.2)
   - vehicle: type: issue
   - source repo: git-semver
   - target repo: git-semver
@@ -59,3 +59,26 @@ The owner, 2026-11-28: "the version bumps should feel seamless", and on this poi
 - This repository's own job declaration and any change in git-cicd or git-vendored (units 1, 3 and 4 of the plan).
 - Raising a version by more than a patch automatically; choosing the bump from commit messages.
 - Marking a release as defective; anything else about how versions move.
+
+## Issues
+
+| Issue | Scope |
+|-------|-------|
+| gsv-1fc3.1 | Fixing mode of `check-bump`: one local patch commit (updates + changelog) for the components lacking a bump; `push_bump` config key, `--fix/--no-fix`; schema; tests |
+| gsv-1fc3.2 | Push of that commit to the source branch with `CICD_WRITE_TOKEN`; refusals (no token, target/release branch, not on origin, moved on); token redaction; exit non-zero after pushing; tests |
+| gsv-1fc3.3 | Token guard for pytest (`tests/conftest.py`) and bats (`tests/bats/helpers.bash`) with guard-removal tests; README and AGENTS.md; VERSION patch bump with changelog |
+
+## Refinement decisions
+
+- **One config key `push_bump`** (bool, default true with `bump_on: pull_request`, false otherwise), plus `--fix`/`--no-fix` to force it either way — gsv-1fc3.1. Reason: the doc asks for one documented setting that turns the behaviour off and gives "check only, as today"; a fix that is never pushed happens only on local runs.
+- **The fix commit is named `chore: bump version (root A -> B, ...)` and contains only the files the bump wrote** (no `git add -A`) — gsv-1fc3.1. Reason: it matches the existing bump commit subjects and keeps unrelated changes in the worktree out of the commit.
+- **No commit at all when any component's version went down, is malformed or is missing** — gsv-1fc3.1. Reason: the doc treats these as errors, not something to fix; failing closed avoids pushing a partial fix.
+- **Fixing mode requires the resolved head to be the checked-out HEAD** — gsv-1fc3.1. Reason: the commit is built on the commit under test; git-cicd's open workflow checks out `pull_request.head.sha` detached, so in CI the two match.
+- **git-semver owns the push, not `release`** — gsv-1fc3.2. Reason: the version-check job runs `git-semver check-bump` directly, and `release` is not on that path.
+- **"Release branch" means the target branch, `main` and `master`** — gsv-1fc3.2. Reason: the doc does not define it and git-semver has no release-branch config; these are the branches that are released from.
+- **A fork is detected as "source branch not on origin"** (`git ls-remote`), and "moved on" means the remote SHA differs from the resolved head; the push is never forced — gsv-1fc3.2. Reason: a single check covers both refusal cases the doc names.
+- **The token is passed through the `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n` env vars as an `http.https://github.com/.extraheader`, with an empty first entry to reset the one actions/checkout persisted**; git output is redacted — gsv-1fc3.2. Reason: this keeps the token off the command line and out of `.git/config`, and stops GITHUB_TOKEN (which starts no workflow) from being the credential that is used.
+- **After pushing, exit 1 and tell the user to wait for the pushed commit's run** — gsv-1fc3.2. Reason: "does not record a pass" for the commit that lacked the bump.
+- **Guard-removal tests run a probe with all five tokens exported (a pytest subprocess; bats calls `sandbox` after exporting them)** — gsv-1fc3.3. Reason: a test that only checks the variables are absent would still pass on a runner that has no tokens.
+- **VERSION gets a patch bump, made once after gsv-1fc3.1 and gsv-1fc3.2** — gsv-1fc3.3. Reason: the default changes only under `bump_on: pull_request`; a patch keeps to the doc's patch-only rule; the `version-check` job requires the bump in the unit's own work.
+- **This repo's `.vendored/configs/git-cicd.json` is not changed** — gsv-1fc3.3. Reason: the doc leaves the job declaration to the adoption unit.
