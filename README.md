@@ -84,6 +84,7 @@ git-semver check [--since <commit>] [--subdir <name>] # Check if a bump is neede
 git-semver bump [patch|minor|major] [opts]            # Bump version, commit, tag, push
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
 git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
+git-semver released [<ref>]                           # Print the version tags released at a commit
 ```
 
 All commands accept `--config <path>` to specify a non-default config file.
@@ -143,6 +144,17 @@ Creates version tags from VERSION files without modifying any files. Reads the c
 | `--config <path>` | Specify a non-default config file |
 
 Idempotent: if a version tag already exists (at any commit), it is skipped. In a monorepo this is the expected state for untouched components — only the bumped component has a new version that needs tagging.
+
+### `git-semver released [<ref>]`
+
+Prints the version tags pointing at a commit (default `HEAD`), one per line, sorted, as full tag names: `vX.Y.Z` for the root, `<subdir>/vX.Y.Z` for a subdirectory. Never prints `latest` or any other non-version tag. When no version was released at the commit it prints nothing and exits 0; a ref that is not a commit is an error (exit 1).
+
+Read-only and local: it reads only the repository's tags, so it needs no config file, no token and no network. A repository's own step after git-semver's release uses it to tell whether this run released a version, and which (see [Publishing after a release](#publishing-after-a-release)).
+
+```bash
+git-semver released              # e.g. v1.4.0
+git-semver released "$CICD_HEAD" # ask about a specific commit
+```
 
 ### Local usage
 
@@ -338,6 +350,36 @@ It reads the run from git-cicd's variables when they are set and from the GitHub
 | `CICD_INPUT_BUMP_TYPE`, `CICD_INPUT_SUBDIRECTORY`, `CICD_INPUT_CHANGELOG_DESCRIPTION` | `INPUT_BUMP_TYPE`, `INPUT_SUBDIRECTORY`, `INPUT_CHANGELOG_DESCRIPTION` | Manual-run inputs |
 
 `gh` reads its token from `GH_TOKEN` or `GITHUB_TOKEN` (git-cicd's merge and manual workflows pass `GITHUB_TOKEN`). `release bump` and `release publish` are unchanged; `version-bump.yml` keeps calling them.
+
+### Publishing after a release
+
+git-semver's publish is a tag plus a GitHub Release. Publishing anything else (a package to PyPI, a container image) is the repository's own later step in the same git-cicd job, after `release`:
+
+```json
+"release": {
+  "name": "Release",
+  "on": ["merge"],
+  "branches": ["main"],
+  "paths": ["**"],
+  "steps": [".vendored/pkg/git-semver/release", "ci/publish-image.sh"]
+}
+```
+
+The later step asks `git-semver released` whether this run released a version and stops when none was:
+
+```bash
+#!/bin/bash
+# ci/publish-image.sh
+set -euo pipefail
+tags=$(.vendored/pkg/git-semver/git-semver released)
+[ -z "$tags" ] && exit 0
+for tag in $tags; do
+    echo "publishing $tag"
+    # build and push the image for $tag
+done
+```
+
+With an unprotected branch, the run for the merged change bumps, pushes, tags and releases in one go, so its later step sees the new version. With a protected branch, the run for the merged change only opens the bump pull request and its later step sees nothing; the version is seen by the later step of the run for the merged bump commit (`chore: bump version ...`), which is the run that tags and releases.
 
 ### Protected Branch Support
 
