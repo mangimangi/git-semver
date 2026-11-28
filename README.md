@@ -85,6 +85,7 @@ git-semver bump [patch|minor|major] [opts]            # Bump version, commit, ta
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
 git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
 git-semver released [<ref>]                           # Print the version tags released at a commit
+git-semver check-bump [--base <rev>] [--head <rev>]  # Fail when configured files changed but the version was not raised
 ```
 
 All commands accept `--config <path>` to specify a non-default config file.
@@ -154,6 +155,34 @@ Read-only and local: it reads only the repository's tags, so it needs no config 
 ```bash
 git-semver released              # e.g. v1.4.0
 git-semver released "$CICD_HEAD" # ask about a specific commit
+```
+
+### `git-semver check-bump [--base <rev>] [--head <rev>]`
+
+Fails a pull request that changes configured files without raising the version. For the root and for each subdirectory component, when a file changed on `<head>` since it left `<base>` (`git diff <base>...<head>`, as git-cicd computes a pull request's changed files) matches the component's `files`, the version in its `version_file` at `<head>` must be a valid `X.Y.Z` strictly higher than the one at `<base>` (the target branch). Any increase passes: patch, minor or major.
+
+- No configured file and no version file changed: passes and says so (`root: no configured file changed`).
+- Version unchanged, lower, missing or malformed: fails (exit 1), naming the component, the version at the base and the version found, and prints the command that fixes it: `git-semver bump patch --no-push` (root) or `git-semver bump patch --no-push --subdir <name>` (minor or major are accepted too). `--no-push` commits the bump on the branch without tagging or pushing; the tag is made on merge.
+- Version file changed alone: passes when the version went up, fails when it went down or is malformed.
+- A version file missing at the base counts as no base version: any valid version at the head passes.
+- A component with no `files` configured is skipped with a message.
+
+| Flag | Behavior |
+|------|----------|
+| `--base <rev>` | Commit to compare with; default `$CICD_BASE`. Required from one or the other |
+| `--head <rev>` | Commit under test; default `$CICD_HEAD`, else `HEAD` |
+| `--config <path>` | Specify a non-default config file |
+
+Read-only and local: it needs no token and no network, and writes nothing (no file edits, commits or tags). It is meant as the step of a git-cicd `open` job, which sets `CICD_BASE` (the target branch tip) and `CICD_HEAD` (the pull request head):
+
+```json
+"version-check": {
+  "name": "Version Check",
+  "on": ["open"],
+  "branches": ["main"],
+  "paths": ["**"],
+  "steps": [[".vendored/pkg/git-semver/git-semver", "check-bump"]]
+}
 ```
 
 ### Local usage
