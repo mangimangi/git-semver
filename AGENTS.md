@@ -20,7 +20,7 @@ Config-driven semantic versioning for git repos. By default file changes trigger
 
 ## Development
 
-Scripts use Python 3 with no external dependencies. Type annotations are used throughout.
+Scripts need Python 3.11 or later (`requires-python = ">=3.11"` in `pyproject.toml`, the floor the `test` job runs on) and have no external dependencies. Type annotations are used throughout.
 
 ### Running Checks
 
