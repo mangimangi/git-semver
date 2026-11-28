@@ -2,6 +2,15 @@
 
 All notable changes to git-semver are recorded here.
 
+## [0.2.0] - 2026-11-28
+
+### Added
+- git-deps.labels.json: a documented, versioned labels file (format 1) git-semver reads and writes
+- label, unlabel and labels subcommands record, withdraw and list labels of released versions
+
+### Changed
+- latest is no longer created or moved on any path and tags are never force-pushed; a repository or script that fetched from the latest ref names a version tag (vX.Y.Z) or the default branch instead, and an existing latest tag is left in place and ignored
+
 ## [0.1.2] - 2026-11-28
 
 ### Changed

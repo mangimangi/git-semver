@@ -23,7 +23,7 @@ Config-driven semantic versioning for git repos. Declare which files matter, get
 curl -fsSL https://raw.githubusercontent.com/mangimangi/git-semver/main/install.sh | bash -s <version>
 ```
 
-`<version>` is a release such as `0.1.0` (see the repository's tags); the installer fetches that version's files from its tag. The script is read from `main`, not from a `latest` tag, which the bump-in-the-pull-request path no longer moves.
+`<version>` is a release such as `0.1.0` (see the repository's tags); the installer fetches that version's files from its tag. The script is read from `main`, the default branch; git-semver keeps no `latest` tag (see [No `latest` tag](#no-latest-tag)).
 
 `version-bump.yml` is installed only on a first install: when no earlier git-semver install is recorded in the repository (no `.vendored/manifests/git-semver.version` or `git-semver.files`, and no installed `git-semver` script) and the file is absent. An upgrade never adds it, so a repository that removed it keeps it removed, and an existing `version-bump.yml` is left as it is. A repository that releases through git-cicd does not get it even on a first install: when `.vendored/configs/git-cicd.json` has a job step that runs git-semver's `release`, or `.vendored/configs/git-semver.json` sets `"bump_on": "pull_request"`, the installer skips the workflow and says why in one line. The installed-file manifest lists the workflow only when that install wrote it or an earlier install did and it is still there; it never lists a file that is not on disk.
 
@@ -91,6 +91,9 @@ git-semver bump [patch|minor|major] [opts]            # Bump version, commit, ta
 git-semver bump-all --since <commit> [opts]           # Check all components, bump all triggered
 git-semver tag [--push] [--subdir <name>]             # Create version tags from VERSION files
 git-semver released [<ref>]                           # Print the version tags released at a commit
+git-semver label <version> defect --reason "..."      # Label a released version in git-deps.labels.json
+git-semver unlabel <version> <name>                   # Withdraw a label
+git-semver labels [<version>] [--json]                # List labels
 git-semver check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]  # Fail when configured files changed but the version was not raised; in fixing mode push the patch bump
 ```
 
@@ -114,8 +117,8 @@ The complete version release operation:
 4. Applies `updates` — pattern-based find-and-replace across configured files
 5. Updates changelog (if enabled) — collects commits since last tag, filters noise prefixes, prepends dated entry
 6. Commits as `chore: bump version to vX.Y.Z` (or `chore: bump version to <subdir>/vX.Y.Z`)
-7. Creates annotated tag `vX.Y.Z` (or `<subdir>/vX.Y.Z`) + updates `latest` tag
-8. Pushes commit and tags
+7. Creates annotated tag `vX.Y.Z` (or `<subdir>/vX.Y.Z`); no `latest` tag is created or moved
+8. Pushes the commit, then the new tag by name (`git push origin <tag>`, never forced)
 
 | Flag | Behavior |
 |------|----------|
@@ -141,12 +144,12 @@ Creates version tags from VERSION files without modifying any files. Reads the c
 
 - Root: `vX.Y.Z`
 - Subdirectories: `<subdir>/vX.Y.Z`
-- Always creates/updates the `latest` tag
+- Never creates or moves a `latest` tag
 
 | Flag | Behavior |
 |------|----------|
 | (default) | Create tags locally only |
-| `--push` | Create tags and push (`git push --tags --force`) |
+| `--push` | Create tags and push each created tag by name (`git push origin <tag>`), never forced |
 | `--subdir <name>` | Tag a specific subdirectory instead of all components |
 | `--config <path>` | Specify a non-default config file |
 
@@ -162,6 +165,106 @@ Read-only and local: it reads only the repository's tags, so it needs no config 
 git-semver released              # e.g. v1.4.0
 git-semver released "$CICD_HEAD" # ask about a specific commit
 ```
+
+### `git-semver label <version> defect --reason "..." [--fixed-in <version>]`
+
+Labels a released version `defect` in [`git-deps.labels.json`](#labels-git-depslabelsjson) at the root of the working tree. `<version>` is `X.Y.Z` or `vX.Y.Z`; the label goes on its tag (`vX.Y.Z`, or `<subdir>/vX.Y.Z` with `--subdir`).
+
+- The version must be released: its tag must exist (`git rev-parse --verify refs/tags/<tag>^{commit}`), or it fails naming the tag. The label records the commit the tag points at as `commit`, and today's UTC date as `date`.
+- `defect` is the only label git-semver makes; any other name is refused. Labels of other names already in the file are kept and can be removed with `unlabel`.
+- `--reason` is required: one line, not empty.
+- `--fixed-in` names the version that fixes it. It must be a tagged version of the same component and strictly higher than the labelled one; otherwise it fails saying why.
+- Labelling a version that already has the label updates its `reason` (and `fixed_in`, when given; omitting `--fixed-in` keeps the old one) without adding a second one. The original `date` and `commit` are kept: they say when the label was made and what the tag pointed at then. Unknown fields on the label are kept.
+
+| Flag | Behavior |
+|------|----------|
+| `--reason "..."` | Why, in one line. Required |
+| `--fixed-in <version>` | The tagged, higher version that fixes it |
+| `--subdir <name>` | Label a subdirectory component's version (`<subdir>/vX.Y.Z`) |
+
+It prints what it did (`Labelled v0.1.2 defect ...` or `Updated defect on v0.1.2 ...`) and reminds you to commit the file. `label`, `unlabel` and `labels` change or read only `git-deps.labels.json` in the working tree: they never commit, tag or push, read no config file, and need no token and no network. The change reaches the default branch as any other change does (see [Labelling a release](#labelling-a-release)).
+
+### `git-semver unlabel <version> <name>`
+
+Removes the label `<name>` from a version. Any name can be removed, including one git-semver does not make, and the version's tag need not exist. A version left with no labels is dropped from the file, and a file left with nothing in it is deleted, so `label` followed by `unlabel` leaves the working tree as it was. When the version has no such label it says so (`No defect label on v0.1.2`) and exits 0. `--subdir <name>` removes it from `<subdir>/vX.Y.Z`.
+
+### `git-semver labels [<version>] [--json]`
+
+Lists the labels, one line per label in the file's order, unknown names included:
+
+```
+v0.1.2  defect  2026-11-28  455ee13  fixed in 0.1.3  — medici init fails on a fresh checkout
+```
+
+With `<version>` it lists that version's labels only; with `--subdir <name>` and no version, that component's. `--json` prints the (filtered) content as JSON in the canonical form git-semver writes. It prints nothing (exit 0) when there are none; a malformed file is an error with the reader's message.
+
+| Flag | Behavior |
+|------|----------|
+| `<version>` | Only this version (`X.Y.Z` or `vX.Y.Z`) |
+| `--subdir <name>` | A subdirectory component's versions |
+| `--json` | Print JSON instead of lines |
+
+### Labelling a release
+
+For a repository whose default branch is protected, a label reaches it through a pull request like any other change:
+
+```bash
+git switch -c label-v0.1.2
+git-semver label 0.1.2 defect --reason "medici init fails on a fresh checkout" --fixed-in 0.1.3
+git add git-deps.labels.json
+git commit -m "label v0.1.2 defect"
+git push -u origin label-v0.1.2
+gh pr create --fill     # or open the pull request in the browser; merge it when it passes
+```
+
+`git-deps.labels.json` is not one of the configured `files`, so labelling does not ask for a version bump (`check-bump` does not fire on it). Withdraw a label the same way with `git-semver unlabel 0.1.2 defect`.
+
+### Labels (`git-deps.labels.json`)
+
+A **label** is something the publisher says about a version it already released. The first label is `defect`: the version should not be used (it cannot run, it broke its adopters), usually with the version that fixes it. A version tag is never moved or deleted to say this; the label sits beside it in a file.
+
+The file is `git-deps.labels.json` at the root of the repository, and what counts is the copy on the default branch: whoever keeps that branch vouches for it. A reader such as [git-deps](https://github.com/mangimangi/git-deps) reads it through git; nothing calls a platform. This section is the contract such a reader relies on; [`templates/labels.schema`](templates/labels.schema) is the same format as a JSON Schema.
+
+```json
+{
+  "format": 1,
+  "versions": {
+    "v0.1.2": [
+      {
+        "name": "defect",
+        "reason": "medici init fails on a fresh checkout",
+        "date": "2026-11-28",
+        "commit": "455ee13c1f0e5d8b7a2f3e9c6d4b1a0f8e7d6c5b",
+        "fixed_in": "0.1.3"
+      }
+    ],
+    "backend/v2.3.0": [
+      {
+        "name": "defect",
+        "reason": "migrations drop the sessions table",
+        "date": "2026-11-28",
+        "commit": "0123456789abcdef0123456789abcdef01234567"
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `format` | integer, required | Format version of the file. This is format `1`; a reader refuses a higher format it does not know |
+| `versions` | object, required | Labels per released version, keyed by the full version tag name as `git tag` shows it: `vX.Y.Z` for the root, `<subdir>/vX.Y.Z` for a [subdirectory component](#subdirectory-configs-monorepo-support). Each value is a list of labels |
+| `name` | string, required | The label. git-semver makes `defect`; a reader ignores a name it does not know (for example a later `eol`) |
+| `reason` | string | Why, in one line (no newline). `git-semver label` requires it for `defect` |
+| `date` | string, required | UTC date the label was made, `YYYY-MM-DD` |
+| `commit` | string, required | The 40-hex commit the version's tag pointed at when the label was made. A pin is a version and a sha: a reader can tell a label applies to the commit it holds |
+| `fixed_in` | string | The version (`X.Y.Z`, same component) that fixes it, when there is one |
+
+**Strict about structure, tolerant about content.** git-semver refuses a file, with a message naming what is wrong and where (for example `versions['v0.1.2'][0]: 'commit' must be a 40-hex commit sha`), when it is not valid JSON, the top level is not an object, `format` is missing, not an integer or not `1`, `versions` is missing or not an object, a key is not a version tag, a value is not a list, or a label is not an object or has a missing or ill-typed `name`, `commit` or `date`, a `reason` that is not a one-line string, or a `fixed_in` that is not an `X.Y.Z` version. It keeps, ignores and writes back unchanged a label name it does not know, an extra field on a label and an extra top-level key. A missing file means no labels.
+
+**Stable under version control.** git-semver writes the file as JSON indented by two spaces, with a trailing newline and non-ASCII characters as they are. Top-level keys are `format`, `versions`, then unknown keys in the order read; versions are sorted by component (root first, then subdirectories by name), then by version precedence (`v0.9.0` before `v0.10.0`); labels in a version are sorted by name, with fields in the order `name`, `reason`, `date`, `commit`, `fixed_in`, then unknown fields in the order read. Reading and writing a file already in this form leaves it byte for byte the same, so a change shows as only the lines it touched.
+
+**`latest` is computed, not a tag.** A reader's latest version is the newest version no label rules out. git-semver does not keep a `latest` tag.
 
 ### `git-semver check-bump [--base <rev>] [--head <rev>] [--fix|--no-fix]`
 
@@ -433,8 +536,14 @@ It reads the run from git-cicd's variables when they are set and from the GitHub
 | Runs | `version-bump.yml` (the default install), or a git-cicd job calling `release` with no subcommand | git-cicd: an `open` job running `git-semver check-bump` on pull requests into the release branch, and a `merge` job calling `release` with no subcommand |
 | Who bumps | the release run, after the merge: a `chore: bump version` commit | the pull request's author, with `git-semver bump patch --no-push` (or `minor`/`major`); the check fails until they do |
 | What is tagged | the bump commit, which ran no pull request checks | the merged commit, which did |
-| `latest` tag | created and moved | not created or moved |
+| `latest` tag | not created or moved | not created or moved |
 | Branch protection | the workflow must be able to push to the default branch; when it cannot, the bump falls back to a pull request opened with the workflow's own token, which starts no checks and has to be merged by hand | needs no write access to the branch, only to push tags; turn on "require branches to be up to date before merging" so two pull requests that bump to the same version cannot both land (if one does, the release refuses it loudly instead of tagging) |
+
+### No `latest` tag
+
+No git-semver path creates, moves or pushes a `latest` tag, and tags are never force-pushed: `bump`, `bump-all`, `tag --push` and `release` push each version tag they create by name (`git push origin <tag>`), so a tag held elsewhere is never overwritten. A moved tag made `git fetch --tags` fail in every clone that held the old one ("would clobber existing tag"); a version tag, once pushed, never moves.
+
+A `latest` tag an older git-semver left in a repository is left alone and ignored wherever tags are read as versions (it is never released, never used as a bump baseline and never printed by `git-semver released`). Deleting it is the owner's choice: `git push origin :refs/tags/latest` and `git tag -d latest` in each clone. Anything that read from the `latest` ref pins a version tag (`vX.Y.Z`) or reads the default branch instead; a reader that wants the newest usable version computes it as the newest version no [label](#labels-git-depslabelsjson) rules out.
 
 ### Bumping in the pull request (`bump_on: pull_request`)
 
@@ -449,7 +558,7 @@ With `"bump_on": "pull_request"` in `.vendored/configs/git-semver.json`, the bum
 
 Every component is checked before any tag is made, so a failure creates nothing. The new tags are then pushed one by one by name (`git push origin <tag>`, never `--force`, so a tag held elsewhere is never overwritten), with one `gh release create <tag> --generate-notes` each. When every version is already tagged it says so and exits 0, so a second run at the same commit does nothing. Whether the merge changed the version file is read from `CICD_BASE` (else `GITHUB_EVENT_BEFORE`); without one, or with the all-zero SHA, the file counts as changed, so a version already tagged elsewhere fails loudly rather than passing.
 
-- The `latest` tag is not created or moved on this path.
+- The `latest` tag is not created or moved, here or on any other path (see [No `latest` tag](#no-latest-tag)).
 - The commit-subject rules (`chore: bump version`, `chore: install`) are not consulted.
 - A manual run releases the current commit the same way. The bump inputs do not apply: a non-empty `bump_type`, `subdirectory` or `changelog_description` is refused with the reason and the command to use instead (`git-semver bump <type> --no-push` on a branch). Declare no inputs on such a job.
 - Two pull requests can each bump to the same version without a git conflict; the second to merge fails here. Turn on "require branches to be up to date before merging" on the release branch so the second has to re-run `check-bump` against the first.
