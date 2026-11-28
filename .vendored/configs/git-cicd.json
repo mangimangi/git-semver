@@ -6,21 +6,25 @@
       "branches": ["**"],
       "paths": ["git-semver", "release", "install.sh", "templates/**", "tests/**", "pyproject.toml", "ci/**"],
       "setup": "ci/setup.sh",
-      "steps": ["ci/test.sh"]
+      "steps": ["ci/test.sh"],
+      "manual": false
     },
     "vendor-check": {
       "name": "Vendor Check",
       "on": ["open"],
       "branches": ["**"],
       "paths": ["**"],
-      "steps": [".vendored/check"]
+      "steps": [".vendored/check"],
+      "manual": false
     },
     "version-check": {
       "name": "Version Check",
       "on": ["open"],
       "branches": ["main"],
       "paths": ["**"],
-      "steps": [["git-semver", "check-bump"]]
+      "steps": [["git-semver", "check-bump"]],
+      "secrets": ["CICD_WRITE_TOKEN"],
+      "manual": false
     },
     "release": {
       "name": "Release",
@@ -36,6 +40,7 @@
       "branches": ["main"],
       "paths": ["**"],
       "steps": ["ci/update-vendored.sh"],
+      "secrets": ["CICD_WRITE_TOKEN", "VENDOR_PAT"],
       "inputs": {
         "vendor": {
           "description": "Vendor to update (or all)",
@@ -46,7 +51,7 @@
           "default": "latest"
         },
         "private": {
-          "description": "Vendor repo is private (use VENDOR_PAT)",
+          "description": "Vendor repo is private (needs CICD_WRITE_TOKEN with read access to it)",
           "choices": ["true", "false"],
           "default": "false"
         }
